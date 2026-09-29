@@ -66,14 +66,21 @@ def _youtube_id(url: str) -> str:
     return m.group(1) if m else "video"
 
 
-def _print_matches(meta) -> None:
+SOURCE_NAMES = {"chapters": "영상 챕터", "description": "영상 설명란 타임스탬프", "transcript": "영상 자막"}
+
+
+def _print_matches(meta, src) -> None:
     from sequenceguider.report import fmt_t
 
-    where = {"chapters": "영상 챕터", "description": "설명란 타임스탬프"}.get(meta.source, "")
+    where = SOURCE_NAMES.get(meta.source, "")
+    if meta.source == "transcript":
+        where += f" ({src.transcript_lang})" if src.transcript_lang else ""
     typer.echo(f"{where}에서 {len(meta.matches)}개 항목을 읽었습니다:")
     for m in meta.matches:
         mark = f"→ {m.figure.name_ko}" + (f" ×{m.count}" if m.count > 1 else "") if m.figure else "→ (피구라 아님, 건너뜀)"
         typer.echo(f"  {fmt_t(m.chapter.start_s):>7}  {m.chapter.title}  {mark}")
+    if meta.source == "transcript":
+        typer.echo("  (자막은 말한 시점이라 실제 동작보다 조금 이를 수 있어요. 챕터보다 덜 정확하니 한번 확인하세요)")
 
 
 @app.command()
@@ -81,7 +88,7 @@ def preview(
     url: str = typer.Argument(..., help="유튜브 링크"),
     library: Path = typer.Option(None, help="다른 figures.yaml 사용"),
 ) -> None:
-    """링크의 챕터·설명란에서 읽은 시퀀스를 미리 보기 (다운로드 안 함)."""
+    """링크의 챕터·설명란·자막에서 읽은 시퀀스를 미리 보기 (다운로드 안 함)."""
     from sequenceguider.figures import DEFAULT_LIBRARY, FigureLibrary
     from sequenceguider.youtube import fetch_info, sequence_from_metadata
 
@@ -94,9 +101,10 @@ def preview(
     typer.echo(f"{src.title}\n")
     meta = sequence_from_metadata(src, lib)
     if not meta.matches:
-        typer.echo("챕터나 설명란 타임스탬프가 없습니다 → analyze 할 때 -s로 순서를 직접 알려주세요.")
+        typer.echo("챕터·설명란 타임스탬프가 없고 자막에서도 피구라 이름을 찾지 못했습니다 "
+                   "→ analyze 할 때 -s로 순서를 직접 알려주세요.")
         raise typer.Exit(0)
-    _print_matches(meta)
+    _print_matches(meta, src)
     if meta.items:
         typer.echo("\n그대로 쓰거나 고쳐서 -s에 넣으세요:")
         typer.echo(f'  -s "{meta.as_sequence_text()}"')
@@ -107,7 +115,7 @@ def analyze(
     video: str = typer.Argument(..., help="연습 영상 파일 경로 또는 유튜브 링크"),
     sequence: str = typer.Option(None, "--sequence", "-s",
                                  help='순서대로 쉼표 구분. 반복 "x3", 시작 시간 고정 "@1:23". '
-                                      "유튜브 링크는 생략하면 챕터·설명란에서 읽음"),
+                                      "유튜브 링크는 생략하면 챕터·설명란·자막에서 읽음"),
     out: Path = typer.Option(None, help="출력 폴더 (기본: <영상이름>_sequenceguider/)"),
     view: str = typer.Option("side", help="카메라 위치: side(측면, 권장) | front(정면)"),
     role: str = typer.Option("all", help="주의점 관점: all | leader | follower"),
@@ -154,14 +162,14 @@ def analyze(
             lib = FigureLibrary.load(library or DEFAULT_LIBRARY)
             meta = sequence_from_metadata(src, lib)
             if meta.matches:
-                _print_matches(meta)
+                _print_matches(meta, src)
             if not meta.items:
                 typer.echo(
-                    "오류: 영상 챕터·설명란에서 피구라 순서를 찾지 못했습니다. "
+                    "오류: 영상 챕터·설명란·자막에서 피구라 순서를 찾지 못했습니다. "
                     '-s "살리다, 오초 아뜨라스 x3, ..."로 순서를 알려주세요.', err=True)
                 raise typer.Exit(2)
             items = meta.items
-            sequence_note = {"chapters": "영상 챕터", "description": "영상 설명란 타임스탬프"}[meta.source]
+            sequence_note = SOURCE_NAMES[meta.source]
             typer.echo(f'(고치려면: -s "{meta.as_sequence_text()}")')
     else:
         video_path = Path(video)

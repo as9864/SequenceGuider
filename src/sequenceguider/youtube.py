@@ -6,7 +6,9 @@ Two jobs:
    very often list their content as chapters or as timestamp lines in the
    description ("0:45 오초 아뜨라스"); matched against the figure library,
    that gives the sequence AND each figure's start/end time — far better
-   than splitting by step counts.
+   than splitting by step counts. Without those, the captions (the teacher
+   saying "이제 오초 아뜨라스 해 볼게요" at 1:05) give a rougher version of
+   the same thing — which is also what YouTube's own AI summary is built from.
 
 Only for videos you own or are allowed to download, analysed locally for
 personal study (YouTube's Terms of Service restrict downloading).
@@ -17,7 +19,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from sequenceguider.figures import Figure, FigureLibrary, SequenceItem, parse_time
+from sequenceguider.figures import Figure, FigureLibrary, SequenceItem, normalize, parse_time
 
 URL_RE = re.compile(r"^https?://", re.IGNORECASE)
 
@@ -34,6 +36,14 @@ class Chapter:
 
 
 @dataclass
+class Cue:
+    """One caption line."""
+    start_s: float
+    end_s: float
+    text: str
+
+
+@dataclass
 class VideoSource:
     url: str
     id: str
@@ -42,6 +52,10 @@ class VideoSource:
     description: str = ""
     chapters: list[Chapter] = field(default_factory=list)
     path: str | None = None  # local file once downloaded
+    # captions, fetched only when chapters/description give no order;
+    # None = not fetched (yet), [] = fetched but there are none
+    transcript: list[Cue] | None = None
+    transcript_lang: str = ""
 
     def save(self, path: Path) -> None:
         path.write_text(json.dumps(asdict(self), ensure_ascii=False, indent=2), encoding="utf-8")
@@ -50,7 +64,13 @@ class VideoSource:
     def load(cls, path: Path) -> "VideoSource":
         d = json.loads(path.read_text(encoding="utf-8"))
         d["chapters"] = [Chapter(**c) for c in d.get("chapters", [])]
+        if d.get("transcript") is not None:
+            d["transcript"] = [Cue(**c) for c in d["transcript"]]
         return cls(**d)
+
+    @property
+    def needs_transcript(self) -> bool:
+        return not self.chapters and not chapters_from_description(self.description)
 
 
 def _from_info(url: str, info: dict) -> VideoSource:
@@ -81,12 +101,100 @@ def _ydl_options(dest_dir: Path | None, max_height: int) -> dict:
     return opts
 
 
+def _pick_caption(info: dict) -> tuple[str, dict] | None:
+    """(language, format) of the captions to read figure names from.
+
+    Uploaded subtitles first (original language, then Korean/Spanish/English),
+    else the ORIGINAL-language auto captions ("ko-orig"). Never a machine
+    translation: translating "오초 아뜨라스" or "ocho atrás" mangles exactly
+    the words we are looking for.
+    """
+    def best_format(tracks: list[dict]) -> dict | None:
+        by_ext = {t.get("ext"): t for t in tracks if t.get("url")}
+        return next((by_ext[e] for e in ("json3", "vtt") if e in by_ext), None)
+
+    orig = str(info.get("language") or "")
+    manual = {k: v for k, v in (info.get("subtitles") or {}).items() if k != "live_chat"}
+    for want in (orig, "ko", "es", "en"):
+        for lang, tracks in manual.items():
+            if want and (lang == want or lang.startswith(want + "-")) and (fmt := best_format(tracks)):
+                return lang, fmt
+    for lang, tracks in manual.items():
+        if fmt := best_format(tracks):
+            return lang, fmt
+    auto = info.get("automatic_captions") or {}
+    for lang, tracks in auto.items():
+        if lang.endswith("-orig") and (fmt := best_format(tracks)):
+            return lang.removesuffix("-orig"), fmt
+    if orig and orig in auto and (fmt := best_format(auto[orig])):
+        return orig, fmt
+    return None
+
+
+def parse_json3(raw: str) -> list[Cue]:
+    cues = []
+    for ev in json.loads(raw).get("events") or []:
+        text = "".join(seg.get("utf8", "") for seg in ev.get("segs") or []).replace("\n", " ").strip()
+        if not text or "tStartMs" not in ev:
+            continue
+        start = ev["tStartMs"] / 1000
+        cues.append(Cue(start, start + ev.get("dDurationMs", 0) / 1000, text))
+    return cues
+
+
+_VTT_TIME = re.compile(r"((?:\d+:)?\d{1,2}:\d{2}\.\d{3})\s*-->\s*((?:\d+:)?\d{1,2}:\d{2}\.\d{3})")
+
+
+def _vtt_seconds(t: str) -> float:
+    *hm, sec = t.split(":")
+    return sum(int(x) * 60 ** (len(hm) - i) for i, x in enumerate(hm)) + float(sec)
+
+
+def parse_vtt(raw: str) -> list[Cue]:
+    cues = []
+    for block in re.split(r"\n\s*\n", raw.replace("\r", "")):
+        lines = block.strip().splitlines()
+        for i, line in enumerate(lines):
+            if m := _VTT_TIME.search(line):
+                text = " ".join(re.sub(r"<[^>]+>", "", t).strip() for t in lines[i + 1 :]).strip()
+                if text:
+                    cues.append(Cue(_vtt_seconds(m.group(1)), _vtt_seconds(m.group(2)), text))
+                break
+    # auto captions roll: each line is repeated in the next cue — keep the first
+    return [c for i, c in enumerate(cues) if i == 0 or c.text != cues[i - 1].text]
+
+
+def _fetch_transcript(ydl, info: dict) -> tuple[list[Cue], str]:
+    """Captions of the video, or ([], "") when there are none or they can't
+    be fetched — a missing transcript is never an error, just no order."""
+    picked = _pick_caption(info)
+    if picked is None:
+        return [], ""
+    lang, fmt = picked
+    try:
+        raw = ydl.urlopen(fmt["url"]).read().decode("utf-8", errors="replace")
+        cues = parse_json3(raw) if fmt.get("ext") == "json3" else parse_vtt(raw)
+    except Exception:  # network / format trouble: fall back to "no captions"
+        return [], ""
+    return cues, lang
+
+
+def _with_transcript(ydl, src: VideoSource, info: dict) -> VideoSource:
+    if src.needs_transcript:
+        src.transcript, src.transcript_lang = _fetch_transcript(ydl, info)
+    else:
+        src.transcript = []
+    return src
+
+
 def fetch_info(url: str) -> VideoSource:
-    """Metadata only — title, chapters, description. No download."""
+    """Metadata only — title, chapters, description (captions if those have
+    no order). No video download."""
     from yt_dlp import YoutubeDL
 
     with YoutubeDL(_ydl_options(None, 720)) as ydl:
-        return _from_info(url, ydl.extract_info(url, download=False))
+        info = ydl.extract_info(url, download=False)
+        return _with_transcript(ydl, _from_info(url, info), info)
 
 
 def fetch_video(url: str, dest_dir: Path, *, max_height: int = 720) -> VideoSource:
@@ -98,7 +206,9 @@ def fetch_video(url: str, dest_dir: Path, *, max_height: int = 720) -> VideoSour
     if cached.exists():
         src = VideoSource.load(cached)
         if src.url == url or src.id in url:
-            if src.path and Path(src.path).exists():
+            # a source.json from before captions were read has transcript None:
+            # go on — yt-dlp skips the download when the file is already there
+            if src.path and Path(src.path).exists() and (src.transcript is not None or not src.needs_transcript):
                 return src
 
     from yt_dlp import YoutubeDL
@@ -108,7 +218,7 @@ def fetch_video(url: str, dest_dir: Path, *, max_height: int = 720) -> VideoSour
         info = ydl.extract_info(url, download=True)
         downloads = info.get("requested_downloads") or []
         path = downloads[0].get("filepath") if downloads else ydl.prepare_filename(info)
-    src = _from_info(url, info)
+        src = _with_transcript(ydl, _from_info(url, info), info)
     src.path = str(path)
     src.save(cached)
     return src
@@ -149,7 +259,7 @@ class ChapterMatch:
 
 @dataclass
 class MetadataSequence:
-    source: str  # "chapters" | "description" | "none"
+    source: str  # "chapters" | "description" | "transcript" | "none"
     matches: list[ChapterMatch]
 
     @property
@@ -173,12 +283,86 @@ class MetadataSequence:
         return ", ".join(parts)
 
 
+# Aliases that are everyday words in speech ("걷기", "stop", "턴") — fine in a
+# typed sequence or a chapter title, pure noise in a transcript.
+GENERIC_SPOKEN = frozenset(normalize(w) for w in (
+    "walk", "걷기", "워크", "basic", "베이직", "기본스텝", "기본 8", "cross", "turn", "턴",
+    "stop", "정지", "sweep", "스윕", "hook", "rebound", "리바운드",
+))
+
+
+REFERENCE_GAP_S = 15.0  # back to the previous figure this soon: the other name was only a reference
+
+
+def _cue_excerpt(text: str, start: int, end: int, width: int = 36) -> str:
+    """The mention with a little context, for showing where it came from."""
+    a, b = max(0, start - width // 3), min(len(text), end + width)
+    return ("…" if a > 0 else "") + text[a:b].strip() + ("…" if b < len(text) else "")
+
+
+def matches_from_transcript(cues: list[Cue], library: FigureLibrary,
+                            duration_s: float | None) -> list[ChapterMatch]:
+    """Figure order and rough start times from what the teacher says.
+
+    Captions are chopped mid-phrase ("오초" | "아뜨라스"), so the cues are
+    scanned as one text. Then:
+    - consecutive mentions of one figure are one section, starting at the
+      first mention (teachers name the figure, then explain and show it);
+    - a lone mention of another figure that the teacher leaves again within
+      REFERENCE_GAP_S ("살리다에서처럼 골반을… 볼레오는") is a reference, not
+      a new section: A, B, A -> A. Named once and then 20 s of showing it
+      without talking is still a section;
+    - the same figure coming back later after others is a new section.
+    Less exact than chapters: times are when it was SAID, so a section may
+    start a little before the dancing does.
+    """
+    if not cues:
+        return []
+
+    def said_at(m) -> float:
+        return cues[owner[m.start]].start_s
+
+    text, owner = "", []  # owner[i] = cue index of text[i]
+    for i, cue in enumerate(cues):
+        piece = cue.text.strip() + " "
+        text += piece
+        owner.extend([i] * len(piece))
+    found = library.mentions(text, skip=GENERIC_SPOKEN)
+    if not found:
+        return []
+    # (figure, [mentions]) runs
+    runs: list[tuple[Figure, list]] = []
+    for m in found:
+        if runs and runs[-1][0].key == m.figure.key:
+            runs[-1][1].append(m)
+        else:
+            runs.append((m.figure, [m]))
+    changed = True
+    while changed:  # A, B(once, briefly), A -> A
+        changed = False
+        for i in range(1, len(runs) - 1):
+            if (len(runs[i][1]) == 1 and runs[i - 1][0].key == runs[i + 1][0].key
+                    and said_at(runs[i + 1][1][0]) - said_at(runs[i][1][0]) < REFERENCE_GAP_S):
+                runs[i - 1] = (runs[i - 1][0], runs[i - 1][1] + runs[i + 1][1])
+                del runs[i : i + 2]
+                changed = True
+                break
+    starts = [said_at(ms[0]) for _, ms in runs]
+    out = []
+    for i, (fig, ms) in enumerate(runs):
+        end = starts[i + 1] if i + 1 < len(runs) else duration_s
+        title = _cue_excerpt(text, ms[0].start, ms[0].end)
+        out.append(ChapterMatch(Chapter(starts[i], end, title), fig))
+    return out
+
+
 def sequence_from_metadata(src: VideoSource, library: FigureLibrary) -> MetadataSequence:
     chapters, origin = src.chapters, "chapters"
     if not chapters:
         chapters, origin = chapters_from_description(src.description), "description"
     if not chapters:
-        return MetadataSequence("none", [])
+        spoken = matches_from_transcript(src.transcript or [], library, src.duration_s)
+        return MetadataSequence("transcript", spoken) if spoken else MetadataSequence("none", [])
     # close open-ended chapters at the next chapter / video end
     for i, ch in enumerate(chapters):
         if ch.end_s is None:
