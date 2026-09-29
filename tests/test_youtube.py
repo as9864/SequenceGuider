@@ -13,8 +13,8 @@ from sequenceguider.cli import _youtube_id, app
 from sequenceguider.figures import FigureLibrary, parse_sequence
 from sequenceguider.steps import detect_steps
 from sequenceguider.youtube import (
-    Chapter, Cue, VideoSource, chapters_from_description, is_url, matches_from_transcript, parse_json3, parse_vtt,
-    sequence_from_metadata,
+    Chapter, Cue, VideoSource, chapters_from_description, is_url, matches_from_text, matches_from_transcript,
+    parse_json3, parse_vtt, sequence_from_metadata,
 )
 from tests.synthetic import walk
 from tests.test_pipeline import _write_video
@@ -231,6 +231,44 @@ class TestTranscript:
         assert sequence_from_metadata(src, LIB).source == "none"
 
 
+AI_SUMMARY = """이 영상은 탱고 수업으로, 기본 동작을 순서대로 보여줍니다.
+- 0:30 살리다 크루사다로 시작해 기본 8박을 익힙니다.
+- 1:45 오초 아뜨라스를 세 번 반복하며, 살리다처럼 골반을 먼저 돌리라고 강조합니다.
+- 오초 아뜨라스에서는 축을 유지하는 것이 중요합니다.
+- 3:10 마지막으로 뿌에라 데 에헤(Fuera de eje)로 마무리합니다. 두 번째 시도에서는 더 깊게 기울입니다.
+요약: 살리다 → 오초 아뜨라스 → 푸에라 데 에헤"""
+
+
+class TestSummaryText:
+    def test_ai_summary(self):
+        ms = matches_from_text(AI_SUMMARY, LIB)
+        # 살리다처럼 = comparison, the closing recap isn't counted twice, "두 번째" isn't a count
+        assert [(m.figure.key, m.count, m.chapter.start_s) for m in ms] == [
+            ("salida_cruzada", 1, 30.0), ("ocho_atras", 3, 105.0), ("fuera_de_eje", 1, 190.0)]
+        assert ms[1].chapter.title.startswith("- 1:45 오초 아뜨라스를 세 번")
+
+    def test_plain_list_without_times(self):
+        ms = matches_from_text("살리다, 오초 아뜨라스 x3, 사까다(2회) 그리고 볼레오 순서로 연습합니다", LIB)
+        assert [(m.figure.key, m.count, m.chapter.start_s) for m in ms] == [
+            ("salida_cruzada", 1, None), ("ocho_atras", 3, None), ("sacada", 2, None), ("boleo", 1, None)]
+        meta = yt.MetadataSequence("text", ms)
+        assert meta.as_sequence_text() == "살리다 크루사다, 오초 아뜨라스 x3, 사까다 x2, 볼레오"
+        assert [(i.figure.key, i.count, i.anchor_s) for i in meta.items] == \
+            [(i.figure.key, i.count, i.anchor_s) for i in parse_sequence(meta.as_sequence_text(), LIB)]
+
+    def test_topic_of_the_sentence_is_kept(self):
+        # the sentence is about 볼레오; 사까다 later in it is a comparison
+        ms = matches_from_text("먼저 오초. 볼레오를 배우는데 오초 대신 사까다처럼 쓰는 점이 특징. 오초로 돌아와 마무리", LIB)
+        assert [m.figure.key for m in ms] == ["ocho_atras", "boleo", "ocho_atras"]
+
+    def test_times_must_go_forward(self):
+        ms = matches_from_text("2:00 볼레오\n1:00 사까다\n3:00 간초", LIB)
+        assert [m.chapter.start_s for m in ms] == [120.0, None, 180.0]
+
+    def test_nothing(self):
+        assert matches_from_text("오늘 수업 즐거웠습니다. 다음 주에 만나요!", LIB) == []
+
+
 class FakeYDL:
     """yt_dlp.YoutubeDL stand-in: fixed info dict, captions served from a dict."""
     downloads = 0
@@ -372,6 +410,50 @@ class TestCli:
         src.chapters, src.transcript = [], []
         res = CliRunner().invoke(app, ["preview", "https://youtu.be/abcdefghijk"])
         assert res.exit_code == 0 and "-s로 순서를 직접" in res.output
+
+    def test_preview_summary_from_file_and_stdin(self, tmp_path):
+        f = tmp_path / "요약.txt"
+        f.write_text(AI_SUMMARY, encoding="utf-8")
+        for args, stdin in ((["preview", "--summary", str(f)], None), (["preview", "--summary", "-"], AI_SUMMARY)):
+            res = CliRunner().invoke(app, args, input=stdin)
+            assert res.exit_code == 0, res.output
+            assert "붙여넣은 요약글에서 3개 항목" in res.output
+            assert '-s "살리다 크루사다 @0:30, 오초 아뜨라스 x3 @1:45, 푸에라 데 에헤 @3:10"' in res.output
+
+    def test_summary_as_literal_text(self):
+        res = CliRunner().invoke(app, ["preview", "--summary", "살리다 다음 볼레오"])
+        assert res.exit_code == 0 and '-s "살리다 크루사다, 볼레오"' in res.output
+
+    def test_summary_without_figures(self):
+        res = CliRunner().invoke(app, ["preview", "--summary", "좋은 수업이었어요"])
+        assert res.exit_code == 2 and "찾지 못했습니다" in res.output
+
+    def test_preview_needs_url_or_summary(self):
+        assert CliRunner().invoke(app, ["preview"]).exit_code == 2
+
+    def test_analyze_url_with_summary_beats_chapters(self, tmp_path, fake_youtube):
+        out = tmp_path / "out"
+        res = CliRunner().invoke(app, ["analyze", "https://youtu.be/abcdefghijk", "--summary", "까미나따 하고 볼레오",
+                                       "--out", str(out), "--no-overlay"])
+        assert res.exit_code == 0, res.output
+        data = json.loads((out / "result.json").read_text(encoding="utf-8"))
+        assert [f["figure"] for f in data["figures"]] == ["caminata", "boleo"]
+        assert data["sequence_source"] == "붙여넣은 요약글"
+
+    def test_analyze_file_with_summary(self, tmp_path, monkeypatch):
+        track = walk(9)
+        video = tmp_path / "연습.mp4"
+        _write_video(video, track)
+        monkeypatch.setattr(mp_backend, "extract_pose", lambda *a, **kw: track)
+        res = CliRunner().invoke(app, ["analyze", str(video), "--summary", "-", "--no-overlay"],
+                                 input="영상 요약: 살리다 크루사다로 시작하고 오초 아뜨라스로 끝납니다.")
+        assert res.exit_code == 0, res.output
+        data = json.loads((tmp_path / "연습_sequenceguider" / "result.json").read_text(encoding="utf-8"))
+        assert [f["figure"] for f in data["figures"]] == ["salida_cruzada", "ocho_atras"]
+
+    def test_sequence_and_summary_conflict(self, tmp_path):
+        res = CliRunner().invoke(app, ["analyze", "https://youtu.be/abcdefghijk", "-s", "볼레오", "--summary", "볼레오"])
+        assert res.exit_code == 2 and "하나만" in res.output
 
     def test_file_without_sequence_is_an_error(self, tmp_path):
         f = tmp_path / "a.mp4"

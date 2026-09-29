@@ -19,7 +19,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from sequenceguider.figures import Figure, FigureLibrary, SequenceItem, normalize, parse_time
+from sequenceguider.figures import Figure, FigureLibrary, Mention, SequenceItem, normalize, parse_time
 
 URL_RE = re.compile(r"^https?://", re.IGNORECASE)
 
@@ -30,7 +30,7 @@ def is_url(text: str) -> bool:
 
 @dataclass
 class Chapter:
-    start_s: float
+    start_s: float | None  # None: order known, time not (pasted text without timestamps)
     end_s: float | None
     title: str
 
@@ -259,7 +259,7 @@ class ChapterMatch:
 
 @dataclass
 class MetadataSequence:
-    source: str  # "chapters" | "description" | "transcript" | "none"
+    source: str  # "chapters" | "description" | "transcript" | "text" | "none"
     matches: list[ChapterMatch]
 
     @property
@@ -278,8 +278,11 @@ class MetadataSequence:
             if m.figure is None:
                 continue
             count = f" x{m.count}" if m.count > 1 else ""
-            mins, secs = divmod(int(round(m.chapter.start_s)), 60)
-            parts.append(f"{m.figure.name_ko}{count} @{mins}:{secs:02d}")
+            at = ""
+            if m.chapter.start_s is not None:
+                mins, secs = divmod(int(round(m.chapter.start_s)), 60)
+                at = f" @{mins}:{secs:02d}"
+            parts.append(f"{m.figure.name_ko}{count}{at}")
         return ", ".join(parts)
 
 
@@ -296,8 +299,38 @@ REFERENCE_GAP_S = 15.0  # back to the previous figure this soon: the other name 
 
 def _cue_excerpt(text: str, start: int, end: int, width: int = 36) -> str:
     """The mention with a little context, for showing where it came from."""
-    a, b = max(0, start - width // 3), min(len(text), end + width)
-    return ("…" if a > 0 else "") + text[a:b].strip() + ("…" if b < len(text) else "")
+    line_a = text.rfind("\n", 0, start) + 1
+    line_b = text.find("\n", end)
+    line_b = len(text) if line_b < 0 else line_b
+    a, b = max(line_a, start - width // 3), min(line_b, end + width)
+    return ("…" if a > line_a else "") + text[a:b].strip() + ("…" if b < line_b else "")
+
+
+def _runs(found: list[Mention]) -> list[list[Mention]]:
+    """Consecutive mentions of one figure -> one run."""
+    runs: list[list[Mention]] = []
+    for m in found:
+        if runs and runs[-1][0].figure.key == m.figure.key:
+            runs[-1].append(m)
+        else:
+            runs.append([m])
+    return runs
+
+
+def _drop_references(runs: list[list[Mention]], is_reference) -> list[list[Mention]]:
+    """A, B, A -> A when the lone B mention is only a passing reference
+    ("아까 살리다에서처럼 골반을…") — `is_reference(b, a_before, a_after)`."""
+    changed = True
+    while changed:
+        changed = False
+        for i in range(1, len(runs) - 1):
+            if (len(runs[i]) == 1 and runs[i - 1][0].figure.key == runs[i + 1][0].figure.key
+                    and is_reference(runs[i][0], runs[i - 1][-1], runs[i + 1][0])):
+                runs[i - 1] = runs[i - 1] + runs[i + 1]
+                del runs[i : i + 2]
+                changed = True
+                break
+    return runs
 
 
 def matches_from_transcript(cues: list[Cue], library: FigureLibrary,
@@ -319,7 +352,7 @@ def matches_from_transcript(cues: list[Cue], library: FigureLibrary,
     if not cues:
         return []
 
-    def said_at(m) -> float:
+    def said_at(m: Mention) -> float:
         return cues[owner[m.start]].start_s
 
     text, owner = "", []  # owner[i] = cue index of text[i]
@@ -327,32 +360,90 @@ def matches_from_transcript(cues: list[Cue], library: FigureLibrary,
         piece = cue.text.strip() + " "
         text += piece
         owner.extend([i] * len(piece))
+    runs = _drop_references(_runs(library.mentions(text, skip=GENERIC_SPOKEN)),
+                            lambda b, _, a_after: said_at(a_after) - said_at(b) < REFERENCE_GAP_S)
+    starts = [said_at(run[0]) for run in runs]
+    out = []
+    for i, run in enumerate(runs):
+        end = starts[i + 1] if i + 1 < len(runs) else duration_s
+        title = _cue_excerpt(text, run[0].start, run[0].end)
+        out.append(ChapterMatch(Chapter(starts[i], end, title), run[0].figure))
+    return out
+
+
+_SENTENCE_END = re.compile(r"[.!?。]+(?=\s)|\n")
+_KO_NUMBERS = {"두": 2, "세": 3, "석": 3, "네": 4, "넉": 4, "다섯": 5, "여섯": 6, "일곱": 7, "여덟": 8}
+# right after the name, maybe past a particle: "x3", "3회", "(3번)", "를 세 번" — not "두 번째"
+_COUNT_AFTER = re.compile(r"(?:을|를|은|는|이|가|도)?\s*\(?\s*(?:[x×*]\s*(\d+)|(\d+|"
+                          + "|".join(_KO_NUMBERS) + r")\s*(?:회|번|times)(?!\s*째))", re.IGNORECASE)
+
+
+def matches_from_text(text: str, library: FigureLibrary) -> list[ChapterMatch]:
+    """Figure order from free text — typically YouTube's AI summary of the
+    video, copied and pasted ("영상은 살리다로 시작해 오초 아뜨라스를 세 번…").
+
+    - figures in the order they are named; consecutive mentions are one item;
+    - a lone mention of another figure later in a sentence about the figure
+      around it is a reference ("오초 아뜨라스는 살리다처럼…"), not an item;
+    - "x3" / "3회" / "3번" right after the name is the repeat count;
+    - a timestamp on the line ("1:05 오초 아뜨라스", "(2:10)") pins the start
+      of the first figure named there, as long as times keep going forward;
+    - a closing recap that repeats the whole order is not counted twice.
+    """
     found = library.mentions(text, skip=GENERIC_SPOKEN)
     if not found:
         return []
-    # (figure, [mentions]) runs
-    runs: list[tuple[Figure, list]] = []
-    for m in found:
-        if runs and runs[-1][0].key == m.figure.key:
-            runs[-1][1].append(m)
-        else:
-            runs.append((m.figure, [m]))
-    changed = True
-    while changed:  # A, B(once, briefly), A -> A
-        changed = False
-        for i in range(1, len(runs) - 1):
-            if (len(runs[i][1]) == 1 and runs[i - 1][0].key == runs[i + 1][0].key
-                    and said_at(runs[i + 1][1][0]) - said_at(runs[i][1][0]) < REFERENCE_GAP_S):
-                runs[i - 1] = (runs[i - 1][0], runs[i - 1][1] + runs[i + 1][1])
-                del runs[i : i + 2]
-                changed = True
+    breaks = [m.end() for m in _SENTENCE_END.finditer(text)]
+
+    def sentence(pos: int) -> int:
+        return sum(b <= pos for b in breaks)
+
+    first_in_sentence = {sentence(m.start): m.start for m in reversed(found)}
+
+    def is_reference(b: Mention, a_before: Mention, a_after: Mention) -> bool:
+        # the first figure of a sentence is its topic, a later one a comparison
+        return (first_in_sentence[sentence(b.start)] != b.start
+                and sentence(b.start) in (sentence(a_before.start), sentence(a_after.start)))
+
+    runs = _drop_references(_runs(found), is_reference)
+
+    line_starts = [0] + [i + 1 for i, ch in enumerate(text) if ch == "\n"]
+    used_lines: set[int] = set()
+    last_t = -1.0
+    out: list[ChapterMatch] = []
+    for run in runs:
+        first = run[0]
+        line_no = sum(ls <= first.start for ls in line_starts) - 1
+        line_end = text.find("\n", first.start)
+        line = text[line_starts[line_no] : line_end if line_end >= 0 else len(text)]
+        at = None
+        if line_no not in used_lines and (t := _TIMESTAMP.search(line)):
+            if parse_time(t.group(1)) > last_t:
+                at = last_t = parse_time(t.group(1))
+                used_lines.add(line_no)
+        count = 1
+        for m in run:
+            if c := _COUNT_AFTER.match(text, m.end):
+                n = c.group(1) or c.group(2)
+                count = max(1, int(n) if n.isdigit() else _KO_NUMBERS[n])
                 break
-    starts = [said_at(ms[0]) for _, ms in runs]
-    out = []
-    for i, (fig, ms) in enumerate(runs):
-        end = starts[i + 1] if i + 1 < len(runs) else duration_s
-        title = _cue_excerpt(text, ms[0].start, ms[0].end)
-        out.append(ChapterMatch(Chapter(starts[i], end, title), fig))
+        out.append(ChapterMatch(Chapter(at, None, _cue_excerpt(text, first.start, first.end)), first.figure, count))
+    # "...요약: 살리다 → 오초 아뜨라스 → 볼레오" after the detailed walk-through
+    keys = [m.figure.key for m in out]
+    half = len(keys) // 2
+    if half >= 3 and len(keys) % 2 == 0 and keys[:half] == keys[half:]:
+        for early, late in zip(out[:half], out[half:]):
+            if early.chapter.start_s is None:
+                early.chapter.start_s = late.chapter.start_s
+            early.count = max(early.count, late.count)
+        out = out[:half]
+        last_t = -1.0
+        for m in out:  # anchors must keep going forward
+            if m.chapter.start_s is not None:
+                if m.chapter.start_s <= last_t:
+                    m.chapter.start_s = None
+                else:
+                    last_t = m.chapter.start_s
     return out
 
 

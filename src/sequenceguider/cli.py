@@ -66,32 +66,75 @@ def _youtube_id(url: str) -> str:
     return m.group(1) if m else "video"
 
 
-SOURCE_NAMES = {"chapters": "영상 챕터", "description": "영상 설명란 타임스탬프", "transcript": "영상 자막"}
+SOURCE_NAMES = {"chapters": "영상 챕터", "description": "영상 설명란 타임스탬프", "transcript": "영상 자막",
+                "text": "붙여넣은 요약글"}
+
+SUMMARY_HELP = ("유튜브 AI 요약처럼 순서가 적힌 글: 파일 경로, 글 자체, 또는 - (붙여넣고 Ctrl-D, "
+                "Windows는 Ctrl-Z 후 Enter)")
+
+
+def _read_summary(value: str) -> str:
+    if value == "-":
+        if sys.stdin.isatty():
+            typer.echo("요약글을 붙여넣고 Ctrl-D (Windows: Ctrl-Z 후 Enter)를 누르세요:", err=True)
+        return sys.stdin.read()
+    path = Path(value)
+    try:
+        if len(value) < 260 and "\n" not in value and path.is_file():
+            return path.read_text(encoding="utf-8-sig")
+    except OSError:
+        pass
+    return value
+
+
+def _summary_sequence(value: str, library: Path | None):
+    """--summary -> MetadataSequence, or exit with a hint."""
+    from sequenceguider.figures import DEFAULT_LIBRARY, FigureLibrary
+    from sequenceguider.youtube import MetadataSequence, matches_from_text
+
+    lib = FigureLibrary.load(library or DEFAULT_LIBRARY)
+    meta = MetadataSequence("text", matches_from_text(_read_summary(value), lib))
+    if not meta.items:
+        typer.echo("오류: 요약글에서 피구라 이름을 찾지 못했습니다. `sequenceguider figures`로 알아듣는 이름을 "
+                   "확인하거나 -s로 순서를 알려주세요.", err=True)
+        raise typer.Exit(2)
+    _print_matches(meta, None)
+    return meta
 
 
 def _print_matches(meta, src) -> None:
     from sequenceguider.report import fmt_t
 
     where = SOURCE_NAMES.get(meta.source, "")
-    if meta.source == "transcript":
+    if meta.source == "transcript" and src is not None:
         where += f" ({src.transcript_lang})" if src.transcript_lang else ""
     typer.echo(f"{where}에서 {len(meta.matches)}개 항목을 읽었습니다:")
     for m in meta.matches:
         mark = f"→ {m.figure.name_ko}" + (f" ×{m.count}" if m.count > 1 else "") if m.figure else "→ (피구라 아님, 건너뜀)"
-        typer.echo(f"  {fmt_t(m.chapter.start_s):>7}  {m.chapter.title}  {mark}")
+        at = fmt_t(m.chapter.start_s) if m.chapter.start_s is not None else "-"
+        typer.echo(f"  {at:>7}  {m.chapter.title}  {mark}")
     if meta.source == "transcript":
         typer.echo("  (자막은 말한 시점이라 실제 동작보다 조금 이를 수 있어요. 챕터보다 덜 정확하니 한번 확인하세요)")
 
 
 @app.command()
 def preview(
-    url: str = typer.Argument(..., help="유튜브 링크"),
+    url: str = typer.Argument(None, help="유튜브 링크"),
+    summary: str = typer.Option(None, "--summary", help=SUMMARY_HELP),
     library: Path = typer.Option(None, help="다른 figures.yaml 사용"),
 ) -> None:
-    """링크의 챕터·설명란·자막에서 읽은 시퀀스를 미리 보기 (다운로드 안 함)."""
+    """링크의 챕터·설명란·자막, 또는 붙여넣은 요약글에서 읽은 시퀀스를 미리 보기 (다운로드 안 함)."""
     from sequenceguider.figures import DEFAULT_LIBRARY, FigureLibrary
     from sequenceguider.youtube import fetch_info, sequence_from_metadata
 
+    if summary is not None:
+        meta = _summary_sequence(summary, library)
+        typer.echo("\n그대로 쓰거나 고쳐서 -s에 넣으세요:")
+        typer.echo(f'  -s "{meta.as_sequence_text()}"')
+        return
+    if not url:
+        typer.echo("오류: 유튜브 링크나 --summary 중 하나를 주세요.", err=True)
+        raise typer.Exit(2)
     lib = FigureLibrary.load(library or DEFAULT_LIBRARY)
     try:
         src = fetch_info(url)
@@ -102,7 +145,7 @@ def preview(
     meta = sequence_from_metadata(src, lib)
     if not meta.matches:
         typer.echo("챕터·설명란 타임스탬프가 없고 자막에서도 피구라 이름을 찾지 못했습니다 "
-                   "→ analyze 할 때 -s로 순서를 직접 알려주세요.")
+                   "→ 유튜브 AI 요약을 복사해 --summary로 주거나, -s로 순서를 직접 알려주세요.")
         raise typer.Exit(0)
     _print_matches(meta, src)
     if meta.items:
@@ -116,6 +159,7 @@ def analyze(
     sequence: str = typer.Option(None, "--sequence", "-s",
                                  help='순서대로 쉼표 구분. 반복 "x3", 시작 시간 고정 "@1:23". '
                                       "유튜브 링크는 생략하면 챕터·설명란·자막에서 읽음"),
+    summary: str = typer.Option(None, "--summary", help=SUMMARY_HELP + ". -s 대신 순서를 여기서 읽음"),
     out: Path = typer.Option(None, help="출력 폴더 (기본: <영상이름>_sequenceguider/)"),
     view: str = typer.Option("side", help="카메라 위치: side(측면, 권장) | front(정면)"),
     role: str = typer.Option("all", help="주의점 관점: all | leader | follower"),
@@ -139,9 +183,18 @@ def analyze(
     if person not in ("largest", "left", "right"):
         typer.echo("오류: --person은 largest | left | right", err=True)
         raise typer.Exit(2)
+    if sequence and summary is not None:
+        typer.echo("오류: -s와 --summary 중 하나만 주세요.", err=True)
+        raise typer.Exit(2)
 
     source_url = None
     sequence_note = None
+    summary_items = None
+    if summary is not None:  # read before any download: a bad summary fails fast
+        summary_meta = _summary_sequence(summary, library)
+        typer.echo(f'(고치려면: -s "{summary_meta.as_sequence_text()}")')
+        summary_items = summary_meta.items
+        sequence_note = SOURCE_NAMES["text"]
     if is_url(video):
         from sequenceguider.youtube import fetch_video, sequence_from_metadata
 
@@ -156,7 +209,9 @@ def analyze(
         video_path = Path(src.path)
         title = src.title or video_path.stem
         typer.echo(f"{title} ({video_path.name})")
-        if sequence:
+        if summary_items is not None:
+            items = summary_items
+        elif sequence:
             _, items = _load(sequence, library)
         else:
             lib = FigureLibrary.load(library or DEFAULT_LIBRARY)
@@ -176,10 +231,14 @@ def analyze(
         if not video_path.is_file():
             typer.echo(f"오류: 파일이 없습니다: {video_path}", err=True)
             raise typer.Exit(2)
-        if not sequence:
-            typer.echo('오류: 파일 영상은 -s로 순서를 알려주세요. 예: -s "살리다, 오초 아뜨라스 x3"', err=True)
+        if summary_items is not None:
+            items = summary_items
+        elif sequence:
+            _, items = _load(sequence, library)
+        else:
+            typer.echo('오류: 파일 영상은 -s나 --summary로 순서를 알려주세요. 예: -s "살리다, 오초 아뜨라스 x3"',
+                       err=True)
             raise typer.Exit(2)
-        _, items = _load(sequence, library)
         title = video_path.stem
         out = out or video_path.with_name(f"{video_path.stem}_sequenceguider")
     video = video_path
