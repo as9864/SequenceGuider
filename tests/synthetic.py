@@ -7,7 +7,7 @@ offset — so step detection, alignment and checks can be tested for
 
 import numpy as np
 
-from tangoseq.pose.base import JOINTS, J, PoseTrack
+from sequenceguider.pose.base import JOINTS, J, PoseTrack
 
 TORSO = 200.0  # px, hip_mid -> shoulder_mid
 
@@ -88,7 +88,7 @@ def walk(
 
 
 def steps_at(track: PoseTrack) -> None:  # pragma: no cover - debugging helper
-    from tangoseq.steps import detect_steps
+    from sequenceguider.steps import detect_steps
 
     for s in detect_steps(track):
         print(s)

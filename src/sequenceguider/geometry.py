@@ -9,7 +9,7 @@ import warnings
 
 import numpy as np
 
-from tangoseq.pose.base import J, PoseTrack
+from sequenceguider.pose.base import J, PoseTrack
 
 CONF = 0.5
 

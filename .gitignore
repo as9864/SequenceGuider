@@ -5,6 +5,6 @@ __pycache__/
 *.egg-info/
 build/
 dist/
-models/
-out/
-data/
+/models/
+/out/
+/data/

@@ -1,4 +1,4 @@
-# TangoSequenceCoach (`tangoseq`)
+# SequenceGuider (`sequenceguider`)
 
 탱고 연습 영상과 **시퀀스 순서**를 주면, 영상을 피구라별 구간으로 나누고 각 피구라에서
 **주의할 점**과 **자동 자세 체크 결과**를 정리한 학습 가이드(HTML)를 만들어 줍니다.
@@ -11,13 +11,13 @@
 
 ```bash
 uv sync
-uv run tangoseq analyze 연습영상.mp4 -s "살리다, 오초 아뜨라스 x3, 뿌에라 에헤"
-# → 연습영상_tangoseq/index.html 을 브라우저로 열기
+uv run sequenceguider analyze 연습영상.mp4 -s "살리다, 오초 아뜨라스 x3, 뿌에라 에헤"
+# → 연습영상_sequenceguider/index.html 을 브라우저로 열기
 ```
 
-- 첫 실행 시 MediaPipe 포즈 모델(~9MB)을 `~/.cache/tangoseq/`에 받습니다. GPU 없이 CPU로 동작합니다
-- 영상 없이 주의점만 보고 싶으면: `uv run tangoseq guide "살리다, 오초 아뜨라스, 푸에라 데 에헤"`
-- 알아듣는 피구라 이름 목록: `uv run tangoseq figures`
+- 첫 실행 시 MediaPipe 포즈 모델(~9MB)을 `~/.cache/sequenceguider/`에 받습니다. GPU 없이 CPU로 동작합니다
+- 영상 없이 주의점만 보고 싶으면: `uv run sequenceguider guide "살리다, 오초 아뜨라스, 푸에라 데 에헤"`
+- 알아듣는 피구라 이름 목록: `uv run sequenceguider figures`
 
 ### 옵션
 
@@ -41,7 +41,7 @@ uv run tangoseq analyze 연습영상.mp4 -s "살리다, 오초 아뜨라스 x3, 
 - **`@1:23`** — 그 피구라의 시작 시간 고정. 자동 분할이 어긋났을 때 이걸로 바로잡습니다
 - 표기는 유연합니다: `뿌에라 에헤` = `푸에라데에헤` = `Fuera de eje`. 틀리면 비슷한 이름을 제안해요
 
-## 결과물 (`<영상>_tangoseq/`)
+## 결과물 (`<영상>_sequenceguider/`)
 
 | 파일 | 내용 |
 | --- | --- |
@@ -69,7 +69,7 @@ uv run tangoseq analyze 연습영상.mp4 -s "살리다, 오초 아뜨라스 x3, 
 
 ## 피구라 지식 베이스 고치기
 
-주의점·기준값·별칭은 전부 [`src/tangoseq/data/figures.yaml`](src/tangoseq/data/figures.yaml)에 있습니다.
+주의점·기준값·별칭은 전부 [`src/sequenceguider/data/figures.yaml`](src/sequenceguider/data/figures.yaml)에 있습니다.
 코드 수정 없이 이 파일만 고치면 됩니다. 현재 17개 피구라(까미나따, 살리다 크루사다, 크루사다,
 오초 아델란떼/아뜨라스, 히로, 사까다, 볼레오, 빠라다, 빠사다, 바리다, 깔레시따, 간초, 볼까다,
 꼴가다, 푸에라 데 에헤, 레보떼)가 들어 있습니다.

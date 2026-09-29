@@ -4,14 +4,14 @@ import av
 import numpy as np
 import pytest
 
-from tangoseq.align import _split_counts, align_sequence
-from tangoseq.analyze import analyze
-from tangoseq.checks import CHECKS
-from tangoseq.figures import FigureLibrary, UnknownFigureError, normalize, parse_sequence, parse_time
-from tangoseq.pose.base import PoseTrack
-from tangoseq.render import render_overlay
-from tangoseq.report import text_guide, write_report
-from tangoseq.steps import detect_steps
+from sequenceguider.align import _split_counts, align_sequence
+from sequenceguider.analyze import analyze
+from sequenceguider.checks import CHECKS
+from sequenceguider.figures import FigureLibrary, UnknownFigureError, normalize, parse_sequence, parse_time
+from sequenceguider.pose.base import PoseTrack
+from sequenceguider.render import render_overlay
+from sequenceguider.report import text_guide, write_report
+from sequenceguider.steps import detect_steps
 from tests.synthetic import walk
 
 LIB = FigureLibrary.load()

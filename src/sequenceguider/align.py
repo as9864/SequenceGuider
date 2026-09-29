@@ -15,8 +15,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from tangoseq.figures import SequenceItem
-from tangoseq.steps import Step
+from sequenceguider.figures import SequenceItem
+from sequenceguider.steps import Step
 
 
 @dataclass

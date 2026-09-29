@@ -4,12 +4,12 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from tangoseq.align import Segment, align_sequence
-from tangoseq.checks import CheckResult, View, evaluate
-from tangoseq.figures import SequenceItem
-from tangoseq.geometry import reference_torso_length
-from tangoseq.pose.base import PoseTrack
-from tangoseq.steps import Step, detect_steps
+from sequenceguider.align import Segment, align_sequence
+from sequenceguider.checks import CheckResult, View, evaluate
+from sequenceguider.figures import SequenceItem
+from sequenceguider.geometry import reference_torso_length
+from sequenceguider.pose.base import PoseTrack
+from sequenceguider.steps import Step, detect_steps
 
 
 @dataclass

@@ -10,9 +10,9 @@ import html
 import json
 from pathlib import Path
 
-from tangoseq.analyze import Analysis, FigureAnalysis
-from tangoseq.checks import CheckResult
-from tangoseq.render import keyframe_jpeg_b64
+from sequenceguider.analyze import Analysis, FigureAnalysis
+from sequenceguider.checks import CheckResult
+from sequenceguider.render import keyframe_jpeg_b64
 
 CONFIDENCE_KO = {"high": "분할 신뢰 높음", "medium": "분할 확인 권장", "low": "분할 부정확 — @시간 지정 권장"}
 STATUS_KO = {"ok": "좋아요", "warn": "주의", "unknown": "판단 보류", "na": "측정 불가"}
@@ -286,7 +286,7 @@ def write_report(analysis: Analysis, video: Path, out_dir: Path, *, video_src: s
 
 
 def text_guide(items, role: str = "all") -> str:
-    """Video-free study guide for a sequence (the `tangoseq guide` command)."""
+    """Video-free study guide for a sequence (the `sequenceguider guide` command)."""
     lines = []
     for n, it in enumerate(items, start=1):
         fig = it.figure

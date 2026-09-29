@@ -12,9 +12,9 @@ import av
 import cv2
 import numpy as np
 
-from tangoseq import geometry as g
-from tangoseq.analyze import Analysis, FigureAnalysis
-from tangoseq.pose.base import BONES, J, PoseTrack
+from sequenceguider import geometry as g
+from sequenceguider.analyze import Analysis, FigureAnalysis
+from sequenceguider.pose.base import BONES, J, PoseTrack
 
 OK = (70, 190, 90)  # RGB
 WARN = (230, 70, 55)

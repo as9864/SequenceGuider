@@ -1,4 +1,4 @@
-"""tangoseq — tango sequence coach CLI."""
+"""sequenceguider — tango sequence coach CLI."""
 
 import shutil
 import sys
@@ -15,13 +15,13 @@ app = typer.Typer(no_args_is_help=True, add_completion=False, help="탱고 시�
 
 
 def _load(sequence: str, library: Path | None):
-    from tangoseq.figures import DEFAULT_LIBRARY, FigureLibrary, UnknownFigureError, parse_sequence
+    from sequenceguider.figures import DEFAULT_LIBRARY, FigureLibrary, UnknownFigureError, parse_sequence
 
     lib = FigureLibrary.load(library or DEFAULT_LIBRARY)
     try:
         return lib, parse_sequence(sequence, lib)
     except UnknownFigureError as e:
-        typer.echo(f"오류: {e}\n`tangoseq figures`로 알아듣는 이름 목록을 볼 수 있어요.", err=True)
+        typer.echo(f"오류: {e}\n`sequenceguider figures`로 알아듣는 이름 목록을 볼 수 있어요.", err=True)
         raise typer.Exit(2)
     except ValueError as e:
         typer.echo(f"오류: {e}", err=True)
@@ -37,7 +37,7 @@ def _check_role(role: str) -> None:
 @app.command()
 def figures(library: Path = typer.Option(None, help="다른 figures.yaml 사용")) -> None:
     """알아듣는 피구라 이름 목록."""
-    from tangoseq.figures import DEFAULT_LIBRARY, FigureLibrary
+    from sequenceguider.figures import DEFAULT_LIBRARY, FigureLibrary
 
     lib = FigureLibrary.load(library or DEFAULT_LIBRARY)
     for fig in lib.figures.values():
@@ -52,7 +52,7 @@ def guide(
     library: Path = typer.Option(None),
 ) -> None:
     """영상 없이 시퀀스 순서별 주의점만 출력."""
-    from tangoseq.report import text_guide
+    from sequenceguider.report import text_guide
 
     _check_role(role)
     _, items = _load(sequence, library)
@@ -64,7 +64,7 @@ def analyze(
     video: Path = typer.Argument(..., exists=True, dir_okay=False, help="연습 영상 (mp4/mov)"),
     sequence: str = typer.Option(..., "--sequence", "-s",
                                  help='순서대로 쉼표 구분. 반복 "x3", 시작 시간 고정 "@1:23"'),
-    out: Path = typer.Option(None, help="출력 폴더 (기본: <영상이름>_tangoseq/)"),
+    out: Path = typer.Option(None, help="출력 폴더 (기본: <영상이름>_sequenceguider/)"),
     view: str = typer.Option("side", help="카메라 위치: side(측면, 권장) | front(정면)"),
     role: str = typer.Option("all", help="주의점 관점: all | leader | follower"),
     person: str = typer.Option("largest", help="여러 명이 보일 때: largest | left | right"),
@@ -74,9 +74,9 @@ def analyze(
     reuse_pose: bool = typer.Option(True, help="이전에 뽑은 포즈 캐시 재사용"),
 ) -> None:
     """영상 + 시퀀스 → 피구라별 구간·주의점·자세 체크 HTML 리포트."""
-    from tangoseq.analyze import analyze as run_analysis
-    from tangoseq.pose.base import PoseTrack
-    from tangoseq.report import fmt_t, write_report
+    from sequenceguider.analyze import analyze as run_analysis
+    from sequenceguider.pose.base import PoseTrack
+    from sequenceguider.report import fmt_t, write_report
 
     _check_role(role)
     if view not in ("side", "front"):
@@ -86,7 +86,7 @@ def analyze(
         typer.echo("오류: --person은 largest | left | right", err=True)
         raise typer.Exit(2)
     _, items = _load(sequence, library)
-    out = out or video.with_name(f"{video.stem}_tangoseq")
+    out = out or video.with_name(f"{video.stem}_sequenceguider")
     out.mkdir(parents=True, exist_ok=True)
 
     cache = out / f"pose_{model}_{person}.npz"
@@ -94,7 +94,7 @@ def analyze(
         track = PoseTrack.load(cache)
         typer.echo(f"포즈 캐시 사용: {cache.name}")
     else:
-        from tangoseq.pose.mediapipe_backend import extract_pose
+        from sequenceguider.pose.mediapipe_backend import extract_pose
 
         typer.echo(f"포즈 추출 중 (MediaPipe {model}, 첫 실행 시 모델 다운로드)...")
         with typer.progressbar(length=1000, label="포즈") as bar:
@@ -116,7 +116,7 @@ def analyze(
         raise typer.Exit(1)
 
     if overlay:
-        from tangoseq.render import render_overlay
+        from sequenceguider.render import render_overlay
 
         with typer.progressbar(length=1000, label="영상") as bar:
             state = {"p": 0}

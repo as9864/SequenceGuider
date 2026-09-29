@@ -16,9 +16,9 @@ from typing import Literal
 
 import numpy as np
 
-from tangoseq import geometry as g
-from tangoseq.figures import DEFAULT, CheckSpec
-from tangoseq.pose.base import PoseTrack
+from sequenceguider import geometry as g
+from sequenceguider.figures import DEFAULT, CheckSpec
+from sequenceguider.pose.base import PoseTrack
 
 View = Literal["side", "front"]
 Status = Literal["ok", "warn", "unknown", "na"]

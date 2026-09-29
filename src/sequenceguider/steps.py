@@ -13,8 +13,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from tangoseq.geometry import point, moving_average, reference_torso_length
-from tangoseq.pose.base import PoseTrack
+from sequenceguider.geometry import point, moving_average, reference_torso_length
+from sequenceguider.pose.base import PoseTrack
 
 
 @dataclass(frozen=True)

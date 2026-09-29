@@ -4,7 +4,7 @@ Chosen over COCO-17 models because BlazePose's 33 landmarks include heel
 and toe points — step detection and "which foot carries the weight" need
 feet, not just ankles. Runs fast enough on CPU for offline analysis.
 
-The model file is downloaded once to ~/.cache/tangoseq/.
+The model file is downloaded once to ~/.cache/sequenceguider/.
 """
 
 import urllib.request
@@ -14,14 +14,14 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from tangoseq.pose.base import JOINTS, PoseTrack
+from sequenceguider.pose.base import JOINTS, PoseTrack
 
 MODEL_URLS = {
     "lite": "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task",
     "full": "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task",
     "heavy": "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/latest/pose_landmarker_heavy.task",
 }
-CACHE_DIR = Path.home() / ".cache" / "tangoseq"
+CACHE_DIR = Path.home() / ".cache" / "sequenceguider"
 
 # BlazePose landmark index for each of our joints
 _BLAZEPOSE_INDEX = {
