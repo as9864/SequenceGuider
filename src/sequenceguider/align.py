@@ -109,6 +109,8 @@ def align_sequence(items: list[SequenceItem], steps: list[Step], duration_s: flo
             in_block = [s for s in steps if s.start_t < end_t]
             if in_block:
                 start_t = max(0.0, in_block[0].start_t - 0.3)
+        if block_items[-1].end_s is not None:
+            end_t = min(end_t, block_items[-1].end_s)
         block_steps = [s for s in steps if start_t <= s.mid_t < end_t]
         if last == len(items) and block_steps:
             # don't let the final figure absorb trailing chatter/standing around

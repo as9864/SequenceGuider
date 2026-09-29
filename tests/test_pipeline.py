@@ -46,6 +46,8 @@ class TestFigures:
         assert items[1].count == 3 and items[1].expected_steps == 6
         assert items[2].anchor_s == pytest.approx(83.5)
         assert parse_time("75") == 75.0
+        assert parse_time("1:02:03") == 3723.0
+        assert parse_sequence("볼레오 @1:02:03", LIB)[0].anchor_s == 3723.0
 
     def test_anchor_and_count_either_order(self):
         a = parse_sequence("오초 x2 @0:10", LIB)[0]

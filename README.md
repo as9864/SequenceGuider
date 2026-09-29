@@ -1,6 +1,6 @@
 # SequenceGuider (`sequenceguider`)
 
-탱고 연습 영상과 **시퀀스 순서**를 주면, 영상을 피구라별 구간으로 나누고 각 피구라에서
+탱고 연습 영상(파일 또는 유튜브 링크)과 **시퀀스 순서**를 주면, 영상을 피구라별 구간으로 나누고 각 피구라에서
 **주의할 점**과 **자동 자세 체크 결과**를 정리한 학습 가이드(HTML)를 만들어 줍니다.
 
 > 예: `살리다, 오초 아뜨라스 x3, 푸에라 데 에헤`
@@ -18,6 +18,23 @@ uv run sequenceguider analyze 연습영상.mp4 -s "살리다, 오초 아뜨라�
 - 첫 실행 시 MediaPipe 포즈 모델(~9MB)을 `~/.cache/sequenceguider/`에 받습니다. GPU 없이 CPU로 동작합니다
 - 영상 없이 주의점만 보고 싶으면: `uv run sequenceguider guide "살리다, 오초 아뜨라스, 푸에라 데 에헤"`
 - 알아듣는 피구라 이름 목록: `uv run sequenceguider figures`
+
+### 유튜브 링크로 분석하기
+
+```bash
+uv run sequenceguider preview "https://youtu.be/XXXXXXXXXXX"      # 링크에서 읽은 시퀀스 미리 보기 (다운로드 안 함)
+uv run sequenceguider analyze "https://youtu.be/XXXXXXXXXXX"      # 챕터/설명란에서 순서를 읽어 바로 분석
+uv run sequenceguider analyze "https://youtu.be/XXXXXXXXXXX" -s "살리다, 오초 아뜨라스 x3"   # 순서 직접 지정
+```
+
+- 탱고 수업 영상은 **챕터**나 **설명란 타임스탬프**("0:45 오초 아뜨라스")에 순서가 적혀 있는 경우가 많습니다.
+  이걸 피구라 이름과 맞춰 **순서와 각 피구라의 시작·끝 시간**을 자동으로 채웁니다. 스텝 수로 나누는 것보다 훨씬 정확합니다
+- 인트로·Q&A처럼 피구라가 아닌 챕터는 건너뛰고, 그 구간은 앞 피구라에 섞이지 않습니다
+- 챕터가 없으면 `-s`로 순서를 알려주세요. 챕터가 일부 틀렸으면 출력된 `-s "..."` 문자열을 복사해 고쳐 쓰면 됩니다
+- 영상은 `youtube_<영상ID>_sequenceguider/source/`에 받아 두고 다시 실행하면 재사용합니다 (분석에 충분한 720p 이하, 소리 없이)
+- **본인 영상이나 허락받은 영상만, 개인 학습용으로 사용하세요.** 유튜브 약관은 허용된 경우 외의 다운로드를
+  금지합니다. 받은 영상과 결과물을 다시 배포하지 마세요
+- 공연 영상(카메라 이동, 컷 전환, 밀착 홀드)보다 **고정 카메라 수업·시연 영상**이 훨씬 잘 분석됩니다
 
 ### 옵션
 
@@ -109,6 +126,7 @@ uv run pytest -q     # 합성 스켈레톤 기반 테스트 (모델·영상 불�
 | 모듈 | 역할 |
 | --- | --- |
 | `figures.py` | 지식 베이스 로딩, 이름 매칭, 시퀀스 파싱 |
+| `youtube.py` | 링크 다운로드(yt-dlp), 챕터·설명란에서 시퀀스 읽기 |
 | `pose/` | `PoseTrack` 데이터, MediaPipe 백엔드 |
 | `steps.py` | 스텝(체중이동) 감지 |
 | `align.py` | 시퀀스 → 영상 구간 |

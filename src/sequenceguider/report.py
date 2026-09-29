@@ -226,7 +226,10 @@ v.addEventListener('seeking', () => { if (v.paused) stopAt = null; });
 """
 
 
-def write_report(analysis: Analysis, video: Path, out_dir: Path, *, video_src: str, title: str) -> Path:
+def write_report(
+    analysis: Analysis, video: Path, out_dir: Path, *, video_src: str, title: str,
+    source_url: str | None = None, sequence_note: str | None = None,
+) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     duration = float(analysis.track.t[-1] + 1.0 / analysis.track.fps)
     colors = [PALETTE[i % len(PALETTE)] for i in range(len(analysis.figures))]
@@ -252,6 +255,13 @@ def write_report(analysis: Analysis, video: Path, out_dir: Path, *, video_src: s
     low_conf = sum(fa.segment.confidence == "low" for fa in analysis.figures)
     split_note = (f"<p><b>{low_conf}개 피구라의 자동 분할이 부정확할 수 있어요.</b> 타임라인을 보고 시작 시간을 "
                   "<code>피구라 @0:12</code>처럼 지정해 다시 실행하면 정확해집니다.</p>" if low_conf else "")
+    source_bits = []
+    if source_url:
+        source_bits.append(f"원본: <a href='{html.escape(source_url)}' target='_blank' rel='noopener'>"
+                           f"{html.escape(source_url)}</a>")
+    if sequence_note:
+        source_bits.append(f"시퀀스는 {html.escape(sequence_note)}에서 읽었어요 — 틀리면 -s로 고쳐 다시 실행하세요")
+    source_line = f"<p class='muted small'>{' · '.join(source_bits)}</p>" if source_bits else ""
     role_text = {"all": "리더·팔로워 공통", "leader": "리더", "follower": "팔로워"}[analysis.role]
 
     page = f"""<!doctype html>
@@ -263,6 +273,7 @@ def write_report(analysis: Analysis, video: Path, out_dir: Path, *, video_src: s
 <h1>{html.escape(title)}</h1>
 <p class="muted">{len(analysis.figures)}개 피구라 · 스텝 {len(analysis.steps)}개 감지 · {role_text} 관점 ·
 {'측면' if analysis.view == 'side' else '정면'} 촬영</p>
+{source_line}
 <video id="video" src="{html.escape(video_src)}" controls playsinline preload="metadata"></video>
 <div class="timeline">{''.join(bars)}<span class="cursor"></span></div>
 <p class="muted small">타임라인이나 ▶ 버튼을 누르면 그 구간만 재생됩니다.</p>
@@ -280,7 +291,8 @@ def write_report(analysis: Analysis, video: Path, out_dir: Path, *, video_src: s
     path = out_dir / "index.html"
     path.write_text(page, encoding="utf-8")
     (out_dir / "result.json").write_text(
-        json.dumps(to_json(analysis, video.name), ensure_ascii=False, indent=2), encoding="utf-8"
+        json.dumps({**to_json(analysis, video.name), "source_url": source_url, "sequence_source": sequence_note},
+                   ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return path
 

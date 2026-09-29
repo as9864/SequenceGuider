@@ -63,6 +63,7 @@ class SequenceItem:
     figure: Figure
     count: int = 1
     anchor_s: float | None = None
+    end_s: float | None = None  # hard end (e.g. the video chapter ends here)
     raw: str = ""
 
     @property
@@ -121,6 +122,37 @@ class FigureLibrary:
             raise UnknownFigureError(name, self.suggest(name))
         return self.figures[key]
 
+    def find_in_text(self, text: str) -> Figure | None:
+        """The figure named somewhere inside free text, e.g. a video chapter
+        title "3. 오초 아뜨라스 (Ocho atrás) 연습". Longest matching alias wins,
+        so "ocho atras" beats the bare "ocho"/"오초".
+
+        Latin aliases must match on word boundaries ("turn" must not fire on
+        "return"; an English plural like "Sacadas" is fine); Hangul aliases match as substrings of at least two
+        syllables, since Korean attaches particles ("오초를") to the noun.
+        """
+        plain = unicodedata.normalize("NFKD", text.lower())
+        plain = unicodedata.normalize("NFC", "".join(ch for ch in plain if not unicodedata.combining(ch)))
+        squashed = normalize(text)
+        best: tuple[int, int, str] | None = None  # (-length, position, key)
+        for key, fig in self.figures.items():
+            for alias in (fig.name_ko, fig.name_es, key.replace("_", " "), *fig.aliases):
+                a = normalize(alias)
+                if len(a) < 2:
+                    continue
+                if alias.isascii():
+                    words = [re.escape(w) for w in re.split(r"[\s_\-]+", unicodedata.normalize("NFKD", alias.lower())) if w]
+                    words = ["".join(ch for ch in w if not unicodedata.combining(ch)) for w in words]
+                    m = re.search(r"(?<![a-z])" + r"[\s\-_]*".join(words) + r"(?:e?s)?(?![a-z])", plain)
+                    pos = m.start() if m else -1
+                else:
+                    pos = squashed.find(a)
+                if pos >= 0:
+                    cand = (-len(a), pos, key)
+                    if best is None or cand < best:
+                        best = cand
+        return self.figures[best[2]] if best else None
+
     def suggest(self, name: str, n: int = 3) -> list[str]:
         matches = difflib.get_close_matches(normalize(name), list(self._alias_index), n=n * 3, cutoff=0.5)
         seen: list[str] = []
@@ -141,15 +173,18 @@ class UnknownFigureError(ValueError):
 
 _SEPARATORS = re.compile(r"\s*(?:,|\n|->|→|>|;)\s*")
 _COUNT = re.compile(r"\s*[x×*]\s*(\d+)\s*$", re.IGNORECASE)
-_ANCHOR = re.compile(r"\s*@\s*(\d+(?::\d{1,2})?(?:\.\d+)?)\s*$")
+_ANCHOR = re.compile(r"\s*@\s*(\d+(?::\d{1,2}){0,2}(?:\.\d+)?)\s*$")
 
 
 def parse_time(text: str) -> float:
-    """'83.5' -> 83.5, '1:23' -> 83.0, '1:23.5' -> 83.5."""
-    if ":" in text:
-        minutes, seconds = text.split(":", 1)
-        return int(minutes) * 60 + float(seconds)
-    return float(text)
+    """'83.5' -> 83.5, '1:23' -> 83.0, '1:23.5' -> 83.5, '1:02:03' -> 3723.0."""
+    parts = text.split(":")
+    if len(parts) > 3:
+        raise ValueError(f"시간 형식이 아닙니다: {text!r}")
+    total = 0.0
+    for part in parts[:-1]:
+        total = total * 60 + int(part)
+    return total * 60 + float(parts[-1]) if len(parts) > 1 else float(parts[-1])
 
 
 def parse_sequence(text: str, library: FigureLibrary) -> list[SequenceItem]:
