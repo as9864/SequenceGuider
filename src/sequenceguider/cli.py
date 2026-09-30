@@ -235,5 +235,30 @@ def analyze(
     typer.echo(f"\n리포트: {report}")
 
 
+@app.command()
+def serve(
+    home: Path = typer.Option(Path("."), help="분석 결과(<이름>_sequenceguider/)와 연습 기록을 두는 폴더"),
+    port: int = typer.Option(8765, help="포트"),
+    host: str = typer.Option("127.0.0.1", help="접속 주소. 다른 기기에서 열려면 0.0.0.0 (같은 네트워크에서 누구나 열 수 있음)"),
+    open_browser: bool = typer.Option(True, "--open/--no-open", help="브라우저 자동으로 열기"),
+) -> None:
+    """웹 화면: 분석한 영상으로 배우고, 연습 기록을 남기고, 새 영상을 분석."""
+    import webbrowser
+
+    from sequenceguider.web import make_server
+
+    server = make_server(home, host, port)
+    url = f"http://{'127.0.0.1' if host == '0.0.0.0' else host}:{port}/"
+    typer.echo(f"SequenceGuider 웹: {url}  (폴더: {home.resolve()}, 끄려면 Ctrl+C)")
+    if open_browser:
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+
+
 if __name__ == "__main__":
     app()

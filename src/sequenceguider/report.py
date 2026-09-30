@@ -369,7 +369,10 @@ function showTab(name) {
 tabs.forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
 if (tabs.length) showTab(store.get('sg.tab') === 'review' ? 'review' : 'learn');
 
-// checklist ticks are keyed by figure item id, so they carry over to other videos with the same figure
+// checklist ticks are keyed by figure item id, so they carry over to other videos with the same figure.
+// Opened inside `sequenceguider serve`, the app page (our parent frame) keeps them in its records instead.
+let host = null;
+try { host = window.parent !== window && window.parent.SG ? window.parent.SG : null; } catch (e) {}
 const boxes = document.querySelectorAll('.checklist input');
 function refreshProgress() {
   document.querySelectorAll('.card.learn').forEach(card => {
@@ -379,15 +382,18 @@ function refreshProgress() {
     if (el) el.textContent = all.length ? `${done}/${all.length}` : '';
   });
 }
-boxes.forEach(b => {
-  b.checked = store.get('sg.check.' + b.dataset.id) === '1';
-  b.addEventListener('change', () => {
-    store.set('sg.check.' + b.dataset.id, b.checked ? '1' : null);
-    boxes.forEach(o => { if (o.dataset.id === b.dataset.id) o.checked = b.checked; });
-    refreshProgress();
-  });
-});
-refreshProgress();
+function applyTicks(isChecked) {
+  boxes.forEach(b => { b.checked = isChecked(b.dataset.id); });
+  refreshProgress();
+}
+boxes.forEach(b => b.addEventListener('change', () => {
+  if (host) host.setCheck(b.dataset.id, b.checked);
+  else store.set('sg.check.' + b.dataset.id, b.checked ? '1' : null);
+  boxes.forEach(o => { if (o.dataset.id === b.dataset.id) o.checked = b.checked; });
+  refreshProgress();
+}));
+if (host) { host.getChecks().then(ticks => applyTicks(id => id in ticks)); window.sgApplyTicks = applyTicks; }
+else applyTicks(id => store.get('sg.check.' + id) === '1');
 const printBtn = document.getElementById('print-sheet');
 if (printBtn) printBtn.addEventListener('click', () => {
   document.body.classList.add('print-sheet');
@@ -454,7 +460,7 @@ def write_report(
 <p class="muted small">타임라인이나 ▶ 버튼을 누르면 그 구간만 재생됩니다.</p>
 <nav class="tabs"><button data-tab="learn">배우기</button><button data-tab="review">점검</button></nav>
 <div class="panel" id="learn">
-<p class="muted small">피구라마다 핵심 한 줄과 연습 체크리스트예요. 체크한 항목은 이 브라우저에 저장됩니다.</p>
+<p class="muted small">피구라마다 핵심 한 줄과 연습 체크리스트예요. 체크한 항목은 저장돼서 다시 열어도 남아 있어요.</p>
 {prereq_note}
 {learn_cards}
 {_summary_sheet(analysis, title)}
@@ -476,7 +482,8 @@ def write_report(
     path = out_dir / "index.html"
     path.write_text(page, encoding="utf-8")
     (out_dir / "result.json").write_text(
-        json.dumps({**to_json(analysis, video.name), "source_url": source_url, "sequence_source": sequence_note},
+        json.dumps({**to_json(analysis, video.name), "title": title, "source_url": source_url,
+                    "sequence_source": sequence_note},
                    ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return path
