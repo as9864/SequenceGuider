@@ -1,7 +1,11 @@
 """Study-guide report: one self-contained HTML page + result.json.
 
 Layout, top to bottom: the (overlay) video with a clickable sequence
-timeline, a numbered "learning order" summary, then one card per figure
+timeline, then two tabs. "배우기" (learn) is for someone learning the
+sequence from the video: per figure one key point, the top cautions,
+common mistakes and a practice checklist that remembers its ticks, plus a
+printable one-page summary. "점검" (review) is the analysis of the person
+in the video: a numbered "learning order" summary, then one card per figure
 with its cautions, automatic check results and evidence frames. Clicking
 a figure plays exactly that segment — the loop a learner actually wants.
 """
@@ -12,6 +16,7 @@ from pathlib import Path
 
 from sequenceguider.analyze import Analysis, FigureAnalysis
 from sequenceguider.checks import CheckResult
+from sequenceguider.figures import Figure
 from sequenceguider.render import keyframe_jpeg_b64
 
 CONFIDENCE_KO = {"high": "분할 신뢰 높음", "medium": "분할 확인 권장", "low": "분할 부정확 — @시간 지정 권장"}
@@ -53,6 +58,7 @@ def to_json(analysis: Analysis, video_name: str) -> dict:
                 "steps_detected": len(fa.segment.steps),
                 "steps_expected": fa.segment.item.expected_steps,
                 "split_confidence": fa.segment.confidence,
+                "lesson": _lesson_json(fa.segment.item.figure, analysis.role),
                 "cautions": [
                     {"role": c.role, "text": c.text}
                     for c in fa.segment.item.figure.cautions_for(analysis.role)
@@ -69,6 +75,98 @@ def to_json(analysis: Analysis, video_name: str) -> dict:
             for fa in analysis.figures
         ],
     }
+
+
+def _lesson_json(fig: Figure, role: str) -> dict:
+    lesson = fig.lesson(role)
+    return {
+        "key_point": lesson.key_point,
+        "prerequisites": list(fig.prerequisites),
+        "cautions": [c.text for c in lesson.cautions],
+        "more_cautions": [c.text for c in lesson.more_cautions],
+        "mistakes": [c.text for c in lesson.mistakes],
+        "checklist": [{"id": i.id, "kind": i.kind, "role": i.role, "text": i.text} for i in lesson.checklist],
+    }
+
+
+def _prerequisites(analysis: Analysis) -> list[str]:
+    """Names of figures the sequence builds on but doesn't itself teach, in order."""
+    in_sequence = {fa.segment.item.figure.key for fa in analysis.figures}
+    out: dict[str, str] = {}
+    for fa in analysis.figures:
+        fig = fa.segment.item.figure
+        for key, name in zip(fig.prerequisites, fig.prerequisite_names):
+            if key not in in_sequence:
+                out.setdefault(key, name)
+    return list(out.values())
+
+
+def _role_tag(role: str) -> str:
+    return "" if role == "all" else f"<span class='role role-{role}'>{ROLE_KO[role]}</span>"
+
+
+def _learn_card(fa: FigureAnalysis, analysis: Analysis, color: str) -> str:
+    seg = fa.segment
+    fig = seg.item.figure
+    lesson = fig.lesson(analysis.role)
+    cautions = "".join(f"<li>{_role_tag(c.role)}{html.escape(c.text)}</li>" for c in lesson.cautions)
+    more = ("<details><summary>주의점 더 보기 ({})</summary><ul class='cautions'>{}</ul></details>".format(
+        len(lesson.more_cautions),
+        "".join(f"<li>{_role_tag(c.role)}{html.escape(c.text)}</li>" for c in lesson.more_cautions))
+        if lesson.more_cautions else "")
+    mistakes = ("<h3>흔한 실수</h3><ul class='mistakes'>{}</ul>".format(
+        "".join(f"<li>{_role_tag(c.role)}{html.escape(c.text)}</li>" for c in lesson.mistakes))
+        if lesson.mistakes else "")
+    items = "".join(
+        f"<li><label><input type='checkbox' data-id='{html.escape(i.id)}'>"
+        f"<span class='kind'>{'연습' if i.kind == 'drill' else '확인'}</span>{_role_tag(i.role)}"
+        f"{html.escape(i.text)}</label></li>"
+        for i in lesson.checklist
+    )
+    return f"""
+<section class="card learn" style="--accent:{color}">
+  <header>
+    <div class="num-circle">{seg.index + 1}</div>
+    <div class="titles">
+      <h2>{html.escape(seg.item.label)} <span class="es">{html.escape(fig.name_es)}</span></h2>
+      <p class="muted">{html.escape(fig.summary)}</p>
+    </div>
+    <div class="meta">
+      <button class="play" data-s="{seg.start_t:.2f}" data-e="{seg.end_t:.2f}">▶ {fmt_t(seg.start_t)} – {fmt_t(seg.end_t)}</button>
+    </div>
+  </header>
+  <p class="key-point">{html.escape(lesson.key_point)}</p>
+  <div class="body">
+    <div>
+      <h3>주의할 점</h3>
+      <ul class="cautions">{cautions}</ul>
+      {more}
+      {mistakes}
+    </div>
+    <div>
+      <h3>연습 체크리스트 <span class="progress muted small"></span></h3>
+      <ul class="checklist">{items}</ul>
+    </div>
+  </div>
+</section>"""
+
+
+def _summary_sheet(analysis: Analysis, title: str) -> str:
+    """One printable page: the sequence, each figure's key point and checklist."""
+    seq = " → ".join(html.escape(fa.segment.item.label) for fa in analysis.figures)
+    rows = []
+    for fa in analysis.figures:
+        lesson = fa.segment.item.figure.lesson(analysis.role)
+        checks = "".join(f"<li>☐ {html.escape(i.text)}</li>" for i in lesson.checklist)
+        rows.append(f"<li><b>{html.escape(fa.segment.item.label)}</b> <span class='muted small'>"
+                    f"{fmt_t(fa.segment.start_t)}</span> — {html.escape(lesson.key_point)}<ul>{checks}</ul></li>")
+    return f"""
+<section class="sheet" id="sheet">
+  <div class="sheet-head"><h2>한 장 요약</h2><button id="print-sheet">인쇄</button></div>
+  <p class="print-only"><b>{html.escape(title)}</b></p>
+  <p class="seq">{seq}</p>
+  <ol>{''.join(rows)}</ol>
+</section>"""
 
 
 def _evidence_frames(fa: FigureAnalysis) -> list[tuple[int, bool, str]]:
@@ -206,6 +304,39 @@ button.jump { font-size: .78rem; padding: 1px 7px; margin-left: 4px; }
 .frames { display:flex; flex-wrap: wrap; gap: 10px; align-content: flex-start; }
 .frames figure { flex: 1 1 200px; max-width: 360px; }
 .frames figure { margin: 0; } .frames img { width: 100%; border-radius: 8px; cursor: pointer; display:block; }
+.tabs { display:flex; gap: 6px; margin: 22px 0 4px; border-bottom: 1px solid var(--line); }
+.tabs button { border: none; border-bottom: 3px solid transparent; border-radius: 0; background: none;
+               padding: 8px 14px; font-weight: 600; color: var(--muted); }
+.tabs button.active { color: var(--fg); border-bottom-color: var(--fg); }
+.panel[hidden] { display: none; }
+.prereq { margin: 14px 0; }
+.key-point { font-size: 1.12rem; font-weight: 700; margin: 12px 0 0; padding: 10px 14px;
+             border-radius: 8px; background: var(--bg); border-left: 4px solid var(--accent); }
+details { margin: 6px 0; } details summary { cursor: pointer; color: var(--muted); font-size: .88rem; }
+.mistakes { margin: 0; padding-left: 0; list-style: none; }
+.mistakes li { margin: 6px 0; padding: 8px 10px; border-radius: 8px; background: #d8453a1a; }
+.mistakes li::before { content: "✕ "; color: var(--warn); font-weight: 700; }
+.checklist { margin: 0; padding: 0; list-style: none; }
+.checklist li { margin: 4px 0; }
+.checklist label { display:flex; gap: 8px; align-items: baseline; padding: 6px 8px; border-radius: 8px; cursor: pointer; }
+.checklist label:hover { background: var(--bg); }
+.checklist input { flex: none; transform: translateY(2px); }
+.checklist .role { flex: none; white-space: nowrap; margin-right: 0; }
+.checklist input:checked ~ * { color: var(--muted); }
+.checklist .kind { font-size: .72rem; font-weight: 600; border: 1px solid var(--line); border-radius: 4px;
+                   padding: 0 5px; flex: none; }
+.sheet { background: var(--card); border:1px solid var(--line); border-radius: 12px; padding: 12px 18px; margin: 24px 0; }
+.sheet-head { display:flex; justify-content: space-between; align-items: center; }
+.sheet .seq { font-weight: 600; } .sheet ol { padding-left: 22px; } .sheet ol ul { list-style: none; padding-left: 8px; margin: 2px 0 8px; }
+.print-only { display: none; }
+@media print {
+  body.print-sheet main > *:not(#learn) { display: none !important; }
+  body.print-sheet #learn > *:not(#sheet) { display: none !important; }
+  body.print-sheet #sheet { border: none; margin: 0; padding: 0; }
+  body.print-sheet #print-sheet { display: none; }
+  body.print-sheet .print-only { display: block; }
+  body { background: #fff; color: #000; }
+}
 .note { font-size: .85rem; color: var(--muted); border-top: 1px solid var(--line); margin-top: 28px; padding-top: 12px; }
 """
 
@@ -223,6 +354,46 @@ v.addEventListener('timeupdate', () => {
   if (cursor && v.duration) cursor.style.left = (100 * v.currentTime / v.duration) + '%';
 });
 v.addEventListener('seeking', () => { if (v.paused) stopAt = null; });
+
+// localStorage can be missing or throw (private mode, file:// in some browsers): the page must work without it
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+  set(k, val) { try { val === null ? localStorage.removeItem(k) : localStorage.setItem(k, val); } catch (e) {} },
+};
+const tabs = document.querySelectorAll('.tabs button');
+function showTab(name) {
+  tabs.forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.panel').forEach(p => p.hidden = p.id !== name);
+  store.set('sg.tab', name);
+}
+tabs.forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
+if (tabs.length) showTab(store.get('sg.tab') === 'review' ? 'review' : 'learn');
+
+// checklist ticks are keyed by figure item id, so they carry over to other videos with the same figure
+const boxes = document.querySelectorAll('.checklist input');
+function refreshProgress() {
+  document.querySelectorAll('.card.learn').forEach(card => {
+    const all = card.querySelectorAll('.checklist input');
+    const done = card.querySelectorAll('.checklist input:checked').length;
+    const el = card.querySelector('.progress');
+    if (el) el.textContent = all.length ? `${done}/${all.length}` : '';
+  });
+}
+boxes.forEach(b => {
+  b.checked = store.get('sg.check.' + b.dataset.id) === '1';
+  b.addEventListener('change', () => {
+    store.set('sg.check.' + b.dataset.id, b.checked ? '1' : null);
+    boxes.forEach(o => { if (o.dataset.id === b.dataset.id) o.checked = b.checked; });
+    refreshProgress();
+  });
+});
+refreshProgress();
+const printBtn = document.getElementById('print-sheet');
+if (printBtn) printBtn.addEventListener('click', () => {
+  document.body.classList.add('print-sheet');
+  window.print();
+  document.body.classList.remove('print-sheet');
+});
 """
 
 
@@ -252,6 +423,10 @@ def write_report(
                      f" <span class='muted small'>{fmt_t(fa.segment.start_t)}</span> — {html.escape(key)}{warn}</li>")
 
     cards = "\n".join(_figure_card(fa, analysis, video, c) for fa, c in zip(analysis.figures, colors))
+    learn_cards = "\n".join(_learn_card(fa, analysis, c) for fa, c in zip(analysis.figures, colors))
+    prereqs = _prerequisites(analysis)
+    prereq_note = ("<p class='prereq'><b>미리 할 줄 알면 좋은 것:</b> {}</p>".format(
+        ", ".join(html.escape(name) for name in prereqs)) if prereqs else "")
     low_conf = sum(fa.segment.confidence == "low" for fa in analysis.figures)
     split_note = (f"<p><b>{low_conf}개 피구라의 자동 분할이 부정확할 수 있어요.</b> 타임라인을 보고 시작 시간을 "
                   "<code>피구라 @0:12</code>처럼 지정해 다시 실행하면 정확해집니다.</p>" if low_conf else "")
@@ -277,9 +452,19 @@ def write_report(
 <video id="video" src="{html.escape(video_src)}" controls playsinline preload="metadata"></video>
 <div class="timeline">{''.join(bars)}<span class="cursor"></span></div>
 <p class="muted small">타임라인이나 ▶ 버튼을 누르면 그 구간만 재생됩니다.</p>
+<nav class="tabs"><button data-tab="learn">배우기</button><button data-tab="review">점검</button></nav>
+<div class="panel" id="learn">
+<p class="muted small">피구라마다 핵심 한 줄과 연습 체크리스트예요. 체크한 항목은 이 브라우저에 저장됩니다.</p>
+{prereq_note}
+{learn_cards}
+{_summary_sheet(analysis, title)}
+</div>
+<div class="panel" id="review" hidden>
+<p class="muted small">영상 속 사람의 자세를 자동으로 점검한 결과예요. 내 연습 영상을 분석했을 때 보세요.</p>
 {split_note}
 <div class="order"><b>배우는 순서</b><ol>{''.join(order)}</ol></div>
 {cards}
+</div>
 <div class="note">
 주의점은 피구라별 일반 교수법 초안이고, 자동 체크는 한 대의 카메라로 본 2D 근사입니다 — 몸이 카메라와 비스듬하면
 실제보다 작게 측정됩니다. 판단이 애매하면 강사의 피드백을 우선하세요. 피구라별 주의점과 기준값은
@@ -303,6 +488,8 @@ def text_guide(items, role: str = "all") -> str:
     for n, it in enumerate(items, start=1):
         fig = it.figure
         lines.append(f"{n}. {it.label} ({fig.name_es}) — {fig.summary}")
+        if fig.key_point:
+            lines.append(f"   ★ {fig.key_point}")
         for c in fig.cautions_for(role):
             tag = "" if c.role == "all" else f"[{ROLE_KO[c.role]}] "
             lines.append(f"   · {tag}{c.text}")

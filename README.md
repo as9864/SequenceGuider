@@ -62,7 +62,7 @@ uv run sequenceguider analyze "https://youtu.be/XXXXXXXXXXX" -s "살리다, 오�
 
 | 파일 | 내용 |
 | --- | --- |
-| `index.html` | 학습 가이드. 영상 + 피구라 타임라인(누르면 그 구간만 재생) + 배우는 순서 요약 + 피구라별 카드(주의점, 자동 체크, 문제 순간 캡처) |
+| `index.html` | 학습 가이드. 영상 + 피구라 타임라인(누르면 그 구간만 재생) 아래 두 탭:<br>**배우기** — 피구라별 핵심 한 줄, 주의점 2개(+더 보기), 흔한 실수, 연습 체크리스트(체크가 브라우저에 저장됨), 인쇄용 한 장 요약<br>**점검** — 배우는 순서 요약 + 피구라별 카드(주의점, 자동 체크, 문제 순간 캡처). 내 연습 영상을 분석했을 때 봅니다 |
 | `overlay.mp4` | 스켈레톤, 현재 피구라 이름, 주의점/경고 자막을 입힌 영상 |
 | `result.json` | 구간·체크 결과 원자료 |
 | `pose_*.npz` | 포즈 캐시 — 시퀀스만 바꿔 다시 돌리면 포즈 추출을 건너뜁니다 |
@@ -95,8 +95,13 @@ uv run sequenceguider analyze "https://youtu.be/XXXXXXXXXXX" -s "살리다, 오�
 fuera_de_eje:
   name_ko: 푸에라 데 에헤
   steps: 2
-  cautions:
+  key_point: "골반은 뒤, 머리부터 지지발까지 한 선"   # 배우기 탭의 핵심 한 줄
+  prerequisites: [volcada, colgada]                 # 먼저 할 줄 알면 좋은 피구라
+  cautions:                                         # 적힌 순서 = 우선순위 (앞 2개만 펼쳐 보임)
     - {role: all, text: "골반이 뒤로 가야 합니다 — 골반이 앞으로 밀려 나오면 축이 무너집니다."}
+    - {role: all, text: "...", mistake: true}      # "흔한 실수"로 따로 보임
+  drills:                                           # 연습 체크리스트
+    - {role: all, text: "벽 옆에서 몸을 한 선으로 기울였다 돌아오기 10회"}
   checks:
     - {id: pelvis_offset, min: null, max: 0.03, message_high: "골반이 앞으로 밀려 나왔어요 — ..."}
 ```

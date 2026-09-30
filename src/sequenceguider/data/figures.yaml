@@ -9,7 +9,12 @@
 #   steps               이 피구라 1회에 보통 일어나는 체중이동(스텝) 수 — 영상을 피구라별로
 #                       나눌 때 비율로 쓴다. 정확할 필요는 없고 상대적 길이만 맞으면 된다
 #   summary             한 줄 설명
-#   cautions            주의점. role: all | leader | follower
+#   key_point           배우기 화면 맨 위에 크게 보이는 핵심 한 줄 (없으면 summary)
+#   prerequisites       먼저 할 줄 알아야 하는 피구라 키 목록
+#   cautions            주의점. role: all | leader | follower. 적힌 순서가 곧 우선순위다 —
+#                       배우기 화면은 역할에 맞는 앞쪽 2개만 펼쳐 보여 준다.
+#                       mistake: true 는 "흔한 실수"로 따로 모아 보여 준다
+#   drills              연습 방법. role: all | leader | follower. 연습 체크리스트가 된다
 #   checks              자동 자세 체크 (sequenceguider/checks.py의 id). min/max로 이 피구라 전용
 #                       임계값을 덮어쓰고(null이면 그 방향 기준 없음), message_high/low로
 #                       문구를 바꿀 수 있다
@@ -21,11 +26,15 @@ figures:
     aliases: [caminata, 까미나따, 카미나타, 까미나타, 워크, walk, 걷기]
     steps: 4
     summary: 탱고의 기본 걷기. 모든 피구라의 바탕이 되는 체중이동.
+    key_point: "체중(축)이 먼저, 발은 몸을 따라온다"
     cautions:
-      - {role: all, text: "발만 먼저 내밀지 말고 축(체중)을 먼저 옮기세요 — 발은 몸을 따라옵니다."}
+      - {role: all, text: "발만 먼저 내밀지 말고 축(체중)을 먼저 옮기세요 — 발은 몸을 따라옵니다.", mistake: true}
       - {role: all, text: "지지 다리 위에 골반·흉곽·머리를 차곡차곡 쌓아 한 축으로 서세요."}
       - {role: all, text: "무릎을 잠그지 말고 살짝 풀어 바닥을 밀며 걸으세요."}
       - {role: all, text: "지나가는 발은 지지발 발목을 스치듯 모았다가(콜렉트) 뻗으세요."}
+    drills:
+      - {role: all, text: "혼자 앞으로 8걸음, 뒤로 8걸음 — 매 걸음 지지발 발목을 스치며 모으기"}
+      - {role: all, text: "한 발로 2박 서 있다가 다음 걸음 — 축 위에 완전히 선 뒤 이동"}
     checks:
       - {id: axis_vertical}
       - {id: torso_lean}
@@ -38,11 +47,16 @@ figures:
     aliases: [salida cruzada, salida, 살리다 크루사다, 살리다 끄루사다, 살리다, 기본스텝, 베이직, basic, 기본 8]
     steps: 7
     summary: 기본 8박. 뒤·옆으로 열고 걸어 들어가 팔로워가 크루사다로 다리를 교차한다.
+    key_point: "옆 스텝은 체중을 완전히 옮긴 뒤 다음으로"
+    prerequisites: [caminata]
     cautions:
-      - {role: all, text: "첫 스텝에서 상체가 먼저 쏠리지 않게 — 몸통 전체가 함께 출발합니다."}
+      - {role: all, text: "첫 스텝에서 상체가 먼저 쏠리지 않게 — 몸통 전체가 함께 출발합니다.", mistake: true}
       - {role: all, text: "옆 스텝은 체중을 완전히 옮긴 뒤에 다음 스텝으로 넘어가세요."}
       - {role: follower, text: "크루사다에서는 교차한 앞발로 체중이 완전히 넘어가야 합니다 — 반쯤 걸친 상태로 두지 마세요."}
       - {role: leader, text: "크루사다는 팔로워를 옆으로 밀어서가 아니라 내 걸음 방향과 가슴으로 유도합니다."}
+    drills:
+      - {role: all, text: "8박을 천천히 세며 혼자 3회 — 박마다 체중이 어느 발에 있는지 말로 확인"}
+      - {role: follower, text: "크루사다 자리에서 교차한 뒤 2박 멈춰 서기"}
     checks:
       - {id: axis_vertical}
       - {id: torso_lean}
@@ -54,10 +68,14 @@ figures:
     aliases: [cruzada, 크루사다, 끄루사다, cross]
     steps: 1
     summary: 팔로워가 한쪽 다리를 다른 다리 앞으로 교차하며 체중을 싣는 동작.
+    key_point: "교차한 앞발로 체중을 완전히 싣는다"
+    prerequisites: [caminata]
     cautions:
-      - {role: follower, text: "다리를 교차할 때 골반이 틀어지거나 엉덩이가 뒤로 빠지지 않게 하세요."}
+      - {role: follower, text: "다리를 교차할 때 골반이 틀어지거나 엉덩이가 뒤로 빠지지 않게 하세요.", mistake: true}
       - {role: follower, text: "교차한 뒤 앞발로 체중을 완전히 싣고 축을 다시 세우세요."}
       - {role: follower, text: "무릎 안쪽을 붙여 다리 사이에 틈이 생기지 않게."}
+    drills:
+      - {role: follower, text: "혼자 뒤로 걷다가 교차하고 2박 정지 5회 — 무릎 안쪽이 붙었는지 거울로 확인"}
     checks:
       - {id: axis_vertical}
       - {id: body_line}
@@ -69,11 +87,16 @@ figures:
     aliases: [ocho adelante, forward ocho, 오초 아델란떼, 오초아델란떼, 전진오초, 전진 오초, 포워드오초]
     steps: 2
     summary: 전진하며 피벗으로 8자를 그리는 오초.
+    key_point: "발을 모으고 피벗, 상체는 파트너를 향한 채"
+    prerequisites: [caminata]
     cautions:
-      - {role: all, text: "피벗은 두 발을 모은 상태에서 — 다리를 벌린 채 돌지 마세요."}
+      - {role: all, text: "피벗은 두 발을 모은 상태에서 — 다리를 벌린 채 돌지 마세요.", mistake: true}
       - {role: all, text: "골반이 돌고 상체는 파트너를 향해 남아 있게 (디소시에이션)."}
       - {role: all, text: "피벗하는 동안 지지 다리 위에 서서 축이 흔들리지 않게 하세요."}
       - {role: follower, text: "전진 스텝은 리더 주위로 원을 그리듯, 리더에게서 멀어지지 않게."}
+    drills:
+      - {role: all, text: "벽을 마주 보고 손을 댄 채 전진 오초 10회 — 가슴은 벽을 향하고 골반만 돌리기"}
+      - {role: all, text: "피벗 직전에 1박 멈춰 발이 모였는지 확인"}
     checks:
       - {id: feet_collect}
       - {id: axis_vertical}
@@ -85,11 +108,16 @@ figures:
     aliases: [ocho atras, ocho atrás, back ocho, 오초 아뜨라스, 오초 아트라스, 오초아뜨라스, 후진오초, 후진 오초, 백오초, 오초]
     steps: 2
     summary: 뒤로 걸으며 피벗으로 8자를 그리는 오초.
+    key_point: "다리를 먼저 뒤로 보내고, 발을 모은 뒤 피벗"
+    prerequisites: [caminata]
     cautions:
       - {role: follower, text: "뒤로 뻗는 다리를 먼저 보내고 체중은 그다음에 — 상체가 앞으로 숙여지지 않게 하세요."}
       - {role: all, text: "피벗 전에 발을 모으세요."}
-      - {role: follower, text: "엉덩이를 뒤로 빼지 말고 골반을 지지발 위에 두세요."}
+      - {role: follower, text: "엉덩이를 뒤로 빼지 말고 골반을 지지발 위에 두세요.", mistake: true}
       - {role: all, text: "상체는 파트너를 향한 채 골반만 돌립니다."}
+    drills:
+      - {role: follower, text: "벽 잡고 제자리 피벗 10회 — 발을 모은 뒤에만 돌기"}
+      - {role: all, text: "0.5배속 영상을 따라 혼자 3회"}
     checks:
       - {id: torso_lean}
       - {id: pelvis_offset, min: -0.10, message_low: "엉덩이가 뒤로 빠졌어요 — 골반을 지지발 위로 가져오세요"}
@@ -101,11 +129,16 @@ figures:
     aliases: [giro, molinete, 히로, 몰리네떼, 몰리네테, 턴, turn]
     steps: 4
     summary: 팔로워가 리더 주위를 앞-옆-뒤-옆 스텝으로 도는 회전.
+    key_point: "앞·옆·뒤·옆 크기를 일정하게, 스텝마다 피벗 후 발 모으기"
+    prerequisites: [ocho_adelante, ocho_atras]
     cautions:
       - {role: follower, text: "앞·옆·뒤·옆 스텝의 크기를 일정하게, 리더와의 거리를 유지하세요."}
       - {role: follower, text: "스텝마다 피벗한 뒤 발을 모으세요."}
       - {role: all, text: "상체는 계속 파트너를 향하고 골반만 회전합니다."}
-      - {role: leader, text: "자기 축 위에서 회전하세요 — 팔로워를 팔로 끌어당기지 않습니다."}
+      - {role: leader, text: "자기 축 위에서 회전하세요 — 팔로워를 팔로 끌어당기지 않습니다.", mistake: true}
+    drills:
+      - {role: follower, text: "의자 하나를 리더 삼아 주위로 앞·옆·뒤·옆 4바퀴"}
+      - {role: leader, text: "팔을 쓰지 않고 가슴 방향만으로 제자리 축 회전 연습"}
     checks:
       - {id: axis_vertical}
       - {id: feet_collect}
@@ -117,10 +150,14 @@ figures:
     aliases: [sacada, 사까다, 사카다, 싸까다]
     steps: 1
     summary: 파트너가 비운 자리로 다리와 체중을 들여보내 공간을 차지하는 동작.
+    key_point: "발이 아니라 체중이동으로 공간을 차지한다"
+    prerequisites: [caminata, giro]
     cautions:
-      - {role: all, text: "발로 파트너 다리를 치는 게 아니라 체중이동으로 공간을 차지합니다."}
+      - {role: all, text: "발로 파트너 다리를 치는 게 아니라 체중이동으로 공간을 차지합니다.", mistake: true}
       - {role: all, text: "들어가는 발 위로 체중이 완전히 넘어가야 합니다."}
       - {role: all, text: "상체가 먼저 앞으로 나가지 않게 — 축째로 이동하세요."}
+    drills:
+      - {role: all, text: "혼자 걷다가 들어가는 발 위로 체중을 완전히 옮기고 1박 정지 5회"}
     checks:
       - {id: axis_vertical}
       - {id: torso_lean}
@@ -132,11 +169,15 @@ figures:
     aliases: [boleo, voleo, 볼레오, 볼레오스]
     steps: 1
     summary: 골반 회전의 반동으로 자유 다리가 휘감기듯 뻗어 나가는 동작.
+    key_point: "다리는 골반 회전의 결과로 따라온다"
+    prerequisites: [ocho_atras]
     cautions:
-      - {role: follower, text: "다리를 들어서 차지 마세요 — 골반 회전의 결과로 다리가 따라옵니다."}
+      - {role: follower, text: "다리를 들어서 차지 마세요 — 골반 회전의 결과로 다리가 따라옵니다.", mistake: true}
       - {role: follower, text: "지지 다리는 무릎을 살짝 풀고 축을 유지하세요."}
       - {role: all, text: "볼레오 순간에도 상체는 흔들리거나 기울지 않게 안정."}
       - {role: follower, text: "무릎은 붙인 채로, 무릎 아래가 휘감기게."}
+    drills:
+      - {role: follower, text: "벽 잡고 골반만 빠르게 좌우로 돌려 무릎 아래가 따라오는지 확인 10회"}
     checks:
       - {id: axis_vertical}
       - {id: support_knee}
@@ -148,9 +189,13 @@ figures:
     aliases: [parada, 빠라다, 파라다, 정지, stop]
     steps: 1
     summary: 리더가 팔로워의 움직임을 멈춰 세우는 동작.
+    key_point: "멈춰도 축 유지, 체중이 어느 발에 있는지 명확하게"
+    prerequisites: [caminata]
     cautions:
       - {role: all, text: "멈추는 순간에도 축을 유지하고, 체중이 어느 발에 있는지 명확하게."}
-      - {role: all, text: "상체가 앞으로 쏠리면서 멈추지 않게 하세요."}
+      - {role: all, text: "상체가 앞으로 쏠리면서 멈추지 않게 하세요.", mistake: true}
+    drills:
+      - {role: all, text: "걷다가 박자에 맞춰 정지 — 멈춘 순간 반대 발을 들 수 있으면 성공"}
     checks:
       - {id: torso_lean}
       - {id: axis_vertical}
@@ -161,9 +206,13 @@ figures:
     aliases: [pasada, 빠사다, 파사다]
     steps: 1
     summary: 팔로워가 리더의 발을 넘어 지나가는 동작.
+    key_point: "체중을 앞으로 완전히 옮기며, 상체를 세운 채로 넘어간다"
+    prerequisites: [parada]
     cautions:
-      - {role: follower, text: "넘어갈 때 체중을 뒤에 남기지 말고 앞으로 완전히 옮기세요."}
+      - {role: follower, text: "넘어갈 때 체중을 뒤에 남기지 말고 앞으로 완전히 옮기세요.", mistake: true}
       - {role: all, text: "상체를 세운 채로 지나갑니다 — 발을 보려고 숙이지 않기."}
+    drills:
+      - {role: follower, text: "바닥에 물병을 두고 발을 내려다보지 않고 넘어가기 5회"}
     checks:
       - {id: axis_vertical}
       - {id: torso_lean}
@@ -175,9 +224,13 @@ figures:
     aliases: [barrida, 바리다, 바리따, 스윕, sweep]
     steps: 2
     summary: 한 사람이 발로 파트너의 발을 쓸어 옮기는 동작.
+    key_point: "밀지 말고 함께 옮긴다, 축은 각자의 지지발 위"
+    prerequisites: [parada]
     cautions:
       - {role: all, text: "쓸어가는 쪽은 체중을 자기 지지발에 두고, 파트너 발을 밀기보다 함께 옮기세요."}
       - {role: all, text: "쓸리는 쪽은 발에 가벼운 접지를 유지하되 축은 자기 지지발 위에."}
+    drills:
+      - {role: all, text: "혼자 발 옆면으로 바닥의 수건을 쓸어 옮기며 지지발 축 유지 5회"}
     checks:
       - {id: axis_vertical}
       - {id: body_line}
@@ -188,10 +241,15 @@ figures:
     aliases: [calesita, 깔레시따, 칼레시타, 까레시따, 회전목마]
     steps: 1
     summary: 팔로워가 한 발로 서 있고 리더가 그 주위를 걸으며 회전시키는 동작.
+    key_point: "지지 다리 위에 완전히 서서 매달리지 않는다"
+    prerequisites: [parada]
     cautions:
       - {role: follower, text: "지지 다리 위에 완전히 서서 축이 흔들리지 않게 — 리더에게 매달리지 마세요."}
       - {role: follower, text: "자유 다리는 편하게 두되 무릎은 모으세요."}
       - {role: leader, text: "원을 그리며 걸어도 팔로워를 끌지 말고 축을 함께 나누세요."}
+    drills:
+      - {role: follower, text: "한 발로 서서 8박 버티기, 양쪽 모두"}
+      - {role: leader, text: "팔로워 없이 작은 원을 걸으며 상체 방향을 원 중심에 고정"}
     checks:
       - {id: axis_vertical, max: 4.0}
       - {id: support_knee}
@@ -203,9 +261,13 @@ figures:
     aliases: [gancho, 간초, 강초, 간쵸, 갠초, hook]
     steps: 1
     summary: 자유 다리를 파트너의 다리 사이로 넣어 걸었다 빼는 동작.
+    key_point: "차지 말고 무릎부터 접히게"
+    prerequisites: [boleo]
     cautions:
-      - {role: all, text: "발로 차지 말고 허벅지 사이 공간으로 넣어 무릎부터 접히게 하세요."}
+      - {role: all, text: "발로 차지 말고 허벅지 사이 공간으로 넣어 무릎부터 접히게 하세요.", mistake: true}
       - {role: all, text: "지지 다리 축을 유지하고 상체는 안정."}
+    drills:
+      - {role: all, text: "벽 잡고 자유 다리 허벅지를 앞으로 보냈다가 무릎만 접기 10회"}
     checks:
       - {id: axis_vertical}
       - {id: torso_lean}
@@ -216,11 +278,15 @@ figures:
     aliases: [volcada, 볼까다, 볼카다, 볼까따]
     steps: 2
     summary: 팔로워의 축이 리더 쪽으로 앞으로 기울어지는 오프액시스 동작.
+    key_point: "기울어도 머리부터 지지발까지 한 선"
+    prerequisites: [caminata, cruzada]
     cautions:
       - {role: follower, text: "가슴이 리더에게 기대며 축이 앞으로 넘어가도 머리부터 지지발까지 한 선을 유지하세요."}
-      - {role: follower, text: "엉덩이를 뒤로 빼지 마세요 — 허리가 꺾이면 리더에게 매달리게 됩니다."}
+      - {role: follower, text: "엉덩이를 뒤로 빼지 마세요 — 허리가 꺾이면 리더에게 매달리게 됩니다.", mistake: true}
       - {role: follower, text: "자유 다리 발끝은 바닥을 스치듯 그립니다."}
       - {role: leader, text: "팔로 당기지 말고 가슴으로 기울기를 받쳐 주세요."}
+    drills:
+      - {role: follower, text: "벽에 두 손을 대고 몸 전체를 한 선으로 기울였다 돌아오기 10회"}
     checks:
       - {id: body_line}
       - {id: pelvis_offset, min: -0.10}
@@ -231,10 +297,14 @@ figures:
     aliases: [colgada, 꼴가다, 콜가다, 꼴가따]
     steps: 2
     summary: 두 사람이 서로 바깥쪽으로 매달리듯 축을 기울여 회전하는 오프액시스 동작.
+    key_point: "팔이 아니라 몸 전체로 서로 반대 방향에 기댄다"
+    prerequisites: [giro]
     cautions:
       - {role: all, text: "팔 힘이 아니라 몸 전체로 균형을 나누세요 — 서로 반대 방향으로 기댑니다."}
       - {role: all, text: "머리부터 지지발까지 한 선, 허리가 꺾이지 않게."}
       - {role: all, text: "회전하는 동안 지지 다리 무릎은 부드럽게."}
+    drills:
+      - {role: all, text: "파트너와 양손을 잡고 서로 뒤로 기대 10초 버티기 — 허리가 꺾이지 않게"}
     checks:
       - {id: body_line}
       - {id: support_knee}
@@ -245,11 +315,16 @@ figures:
     aliases: [fuera de eje, fueradeeje, 푸에라 데 에헤, 푸에라데에헤, 뿌에라 데 에헤, 뿌에라 에헤, 뿌에라에헤, 푸에라 에헤, off axis, 오프액시스, 오프 액시스]
     steps: 2
     summary: 두 사람이 축을 공유하며 수직에서 벗어나 기울어지는 동작.
+    key_point: "골반은 뒤, 머리부터 지지발까지 한 선"
+    prerequisites: [volcada, colgada]
     cautions:
       - {role: all, text: "상체가 빠지지 않게 — 허리가 꺾이지 않고 머리부터 지지발까지 한 선을 유지하세요."}
       - {role: all, text: "골반이 뒤로 가야 합니다 — 골반이 앞으로 밀려 나오면 축이 무너집니다."}
       - {role: all, text: "두 사람이 체중을 나눠 가지며 기울어요 — 한쪽이 끌거나 매달리지 않기."}
       - {role: all, text: "지지 다리 무릎은 잠그지 말고 부드럽게."}
+    drills:
+      - {role: all, text: "벽 옆에서 몸을 한 선으로 기울였다 돌아오기 10회 — 골반이 먼저 나가지 않게"}
+      - {role: all, text: "거울 옆에 서서 기울인 자세로 사진 한 장 — 어깨·골반·발목이 일직선인지 확인"}
     checks:
       - {id: body_line}
       - {id: pelvis_offset, min: null, max: 0.03, message_high: "골반이 앞으로 밀려 나왔어요 — 골반을 뒤로 두고 상체와 한 선으로"}
@@ -261,9 +336,13 @@ figures:
     aliases: [rebote, 레보떼, 레보테, 리바운드, rebound]
     steps: 2
     summary: 체중을 실으려다 되돌아오는 반동 동작.
+    key_point: "무릎이 아니라 축 전체가 나갔다 돌아온다"
+    prerequisites: [caminata]
     cautions:
-      - {role: all, text: "무릎으로 튕기지 말고 축 전체가 나갔다 돌아옵니다."}
+      - {role: all, text: "무릎으로 튕기지 말고 축 전체가 나갔다 돌아옵니다.", mistake: true}
       - {role: all, text: "되돌아올 때 상체 기울기가 흐트러지지 않게."}
+    drills:
+      - {role: all, text: "앞으로 체중을 반쯤 실었다 되돌아오기 10회 — 상체 기울기 그대로"}
     checks:
       - {id: torso_lean}
       - {id: axis_vertical}
