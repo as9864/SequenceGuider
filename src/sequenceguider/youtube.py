@@ -114,6 +114,34 @@ def fetch_video(url: str, dest_dir: Path, *, max_height: int = 720) -> VideoSour
     return src
 
 
+def fetch_audio(url: str, dest_dir: Path) -> VideoSource:
+    """Download only the sound track (for `notes`: speech-to-text needs no picture).
+
+    Same caching as fetch_video, in its own audio.json so the two don't overwrite
+    each other's file. m4a first: a single stream, so no ffmpeg merge.
+    """
+    cached = dest_dir / "audio.json"
+    if cached.exists():
+        src = VideoSource.load(cached)
+        if (src.url == url or src.id in url) and src.path and Path(src.path).exists():
+            return src
+
+    from yt_dlp import YoutubeDL
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    opts = {"quiet": True, "no_warnings": True, "noplaylist": True,
+            "format": "bestaudio[ext=m4a]/bestaudio/b",
+            "outtmpl": str(dest_dir / "%(id)s.audio.%(ext)s")}
+    with YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        downloads = info.get("requested_downloads") or []
+        path = downloads[0].get("filepath") if downloads else ydl.prepare_filename(info)
+    src = _from_info(url, info)
+    src.path = str(path)
+    src.save(cached)
+    return src
+
+
 # "0:45 오초 아뜨라스", "[1:02:03] - 볼레오", "오초 아뜨라스 (2:10)", "3. 1:20 사까다"
 _TIMESTAMP = re.compile(r"(?<![\d:])((?:\d{1,2}:)?\d{1,2}:\d{2})(?![\d:])")
 _COUNT_IN_TITLE = re.compile(r"(?:[x×*]\s*(\d+)|(\d+)\s*(?:회|번|times))", re.IGNORECASE)
