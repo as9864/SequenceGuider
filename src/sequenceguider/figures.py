@@ -137,6 +137,30 @@ def normalize(text: str) -> str:
     return re.sub(r"[\s\-_.·'’]+", "", text.lower())
 
 
+def _fold(text: str, *, squash: bool) -> tuple[str, list[int]]:
+    """`normalize`-style folding (lowercase, no accents; with `squash`, no
+    spaces/punctuation either) that remembers where each output character
+    came from, so a match can be mapped back to a span of the original text."""
+    out: list[str] = []
+    at: list[int] = []
+    for i, ch in enumerate(text):
+        folded = unicodedata.normalize("NFKD", ch.lower())
+        folded = unicodedata.normalize("NFC", "".join(c for c in folded if not unicodedata.combining(c)))
+        if squash:
+            folded = re.sub(r"[\s\-_.·'’]+", "", folded)
+        out.append(folded)
+        at.extend([i] * len(folded))
+    return "".join(out), at
+
+
+@dataclass(frozen=True)
+class Mention:
+    figure: Figure
+    start: int  # span in the original text
+    end: int
+    length: int  # matched alias length (normalized) — longer is more specific
+
+
 @dataclass
 class FigureLibrary:
     figures: dict[str, Figure]
@@ -189,32 +213,45 @@ class FigureLibrary:
         """The figure named somewhere inside free text, e.g. a video chapter
         title "3. 오초 아뜨라스 (Ocho atrás) 연습". Longest matching alias wins,
         so "ocho atras" beats the bare "ocho"/"오초".
+        """
+        found = self.mentions(text)
+        if not found:
+            return None
+        return min(found, key=lambda m: (-m.length, m.start)).figure
+
+    def mentions(self, text: str, *, skip: frozenset[str] = frozenset()) -> list["Mention"]:
+        """Every figure named in free text, in order, as non-overlapping spans
+        of `text` — "살리다 다음에 오초 아뜨라스" gives two. Where aliases
+        overlap the longest wins, so "ocho atras" is one mention, not "ocho" too.
 
         Latin aliases must match on word boundaries ("turn" must not fire on
         "return"; an English plural like "Sacadas" is fine); Hangul aliases match as substrings of at least two
         syllables, since Korean attaches particles ("오초를") to the noun.
+        `skip`: normalized aliases to ignore (everyday words in speech).
         """
-        plain = unicodedata.normalize("NFKD", text.lower())
-        plain = unicodedata.normalize("NFC", "".join(ch for ch in plain if not unicodedata.combining(ch)))
-        squashed = normalize(text)
-        best: tuple[int, int, str] | None = None  # (-length, position, key)
+        plain, plain_at = _fold(text, squash=False)
+        squashed, squashed_at = _fold(text, squash=True)
+        cands: list[Mention] = []
         for key, fig in self.figures.items():
-            for alias in (fig.name_ko, fig.name_es, key.replace("_", " "), *fig.aliases):
+            for alias in dict.fromkeys((fig.name_ko, fig.name_es, key.replace("_", " "), *fig.aliases)):
                 a = normalize(alias)
-                if len(a) < 2:
+                if len(a) < 2 or a in skip:
                     continue
                 if alias.isascii():
-                    words = [re.escape(w) for w in re.split(r"[\s_\-]+", unicodedata.normalize("NFKD", alias.lower())) if w]
-                    words = ["".join(ch for ch in w if not unicodedata.combining(ch)) for w in words]
-                    m = re.search(r"(?<![a-z])" + r"[\s\-_]*".join(words) + r"(?:e?s)?(?![a-z])", plain)
-                    pos = m.start() if m else -1
+                    words = [w for w in re.split(r"[\s_\-]+", _fold(alias, squash=False)[0]) if w]
+                    pattern = r"(?<![a-z])" + r"[\s\-_]*".join(map(re.escape, words)) + r"(?:e?s)?(?![a-z])"
+                    spans = [(m.start(), m.end()) for m in re.finditer(pattern, plain)]
+                    at = plain_at
                 else:
-                    pos = squashed.find(a)
-                if pos >= 0:
-                    cand = (-len(a), pos, key)
-                    if best is None or cand < best:
-                        best = cand
-        return self.figures[best[2]] if best else None
+                    spans = [(m.start(), m.end()) for m in re.finditer(re.escape(a), squashed)]
+                    at = squashed_at
+                for s, e in spans:
+                    cands.append(Mention(fig, at[s], at[e - 1] + 1, len(a)))
+        taken: list[Mention] = []
+        for c in sorted(cands, key=lambda m: (-m.length, m.start)):
+            if all(c.end <= t.start or c.start >= t.end for t in taken):
+                taken.append(c)
+        return sorted(taken, key=lambda m: m.start)
 
     def suggest(self, name: str, n: int = 3) -> list[str]:
         matches = difflib.get_close_matches(normalize(name), list(self._alias_index), n=n * 3, cutoff=0.5)
