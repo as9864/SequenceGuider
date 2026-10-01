@@ -302,6 +302,143 @@ def analyze(
     typer.echo(f"\n리포트: {report}")
 
 
+def _progress(label: str):
+    """typer progress bar driven by a (done, total) callback."""
+    bar = typer.progressbar(length=1000, label=label)
+    state = {"p": 0}
+
+    def update(done: float, total: float) -> None:
+        p = min(1000, int(1000 * done / total)) if total else 0
+        if p > state["p"]:
+            bar.update(p - state["p"])
+            state["p"] = p
+
+    return bar, update
+
+
+@app.command()
+def notes(
+    video: str = typer.Argument(..., help="레슨 영상 파일 경로 또는 유튜브 링크"),
+    out: Path = typer.Option(None, help="출력 폴더 (기본: <영상이름>_sequenceguider/, analyze와 같은 폴더)"),
+    language: str = typer.Option(None, help="레슨 언어 (es, en, ko ...). 비우면 자동 감지"),
+    translate: bool = typer.Option(True, help="자막을 한국어로 번역"),
+    summary: bool = typer.Option(True, help="핵심 포인트·레슨 흐름·연습 체크리스트 정리"),
+    role: str = typer.Option("all", help="누구 관점으로 정리할지: all | leader | follower"),
+    whisper: str = typer.Option("turbo", help="음성 인식 모델: small(빠름) | medium | turbo(권장) | large-v3(정확)"),
+    model: str = typer.Option("claude-opus-5-5", help="번역·정리에 쓸 Claude 모델"),
+    again: bool = typer.Option(False, "--again", help="핵심 정리를 새로 만들기 (자막·번역은 재사용)"),
+    library: Path = typer.Option(None, help="다른 figures.yaml 사용"),
+) -> None:
+    """긴 레슨 영상 → 자막(전사) + 한국어 번역 + 핵심 포인트·흐름·연습 체크리스트."""
+    import json
+    from datetime import datetime
+
+    from sequenceguider import notes as N
+    from sequenceguider.figures import DEFAULT_LIBRARY, FigureLibrary
+    from sequenceguider.youtube import is_url
+
+    _check_role(role)
+    lib = FigureLibrary.load(library or DEFAULT_LIBRARY)
+    source_url = None
+    if is_url(video):
+        from sequenceguider.youtube import fetch_audio
+
+        source_url = video
+        out = out or Path(f"youtube_{_youtube_id(video)}_sequenceguider")
+        typer.echo("소리 받는 중 (본인 영상이나 허락받은 영상만, 개인 학습용으로 사용하세요)...")
+        try:
+            src = fetch_audio(video, out / "source")
+        except Exception as e:  # yt-dlp raises many types; all mean "couldn't get this video"
+            typer.echo(f"오류: 영상을 받지 못했습니다 — {e}", err=True)
+            raise typer.Exit(1)
+        media, video_file, title = Path(src.path), None, src.title
+    else:
+        media = Path(video)
+        if not media.is_file():
+            typer.echo(f"오류: 파일이 없습니다: {media}", err=True)
+            raise typer.Exit(2)
+        out = out or media.with_name(f"{media.stem}_sequenceguider")
+        video_file, title = media, media.stem
+    out.mkdir(parents=True, exist_ok=True)
+
+    # 1. transcript (cached per 10-minute chunk under .notes_cache/, so a stopped run resumes)
+    loaded = N.load_transcript(out)
+    if loaded and loaded[3] == whisper and (language is None or loaded[1] == language):
+        segments, lang, duration, _ = loaded
+        typer.echo(f"자막 재사용: transcript.json ({len(segments)}줄)")
+    else:
+        typer.echo(f"받아 적는 중 (Whisper {whisper}, 첫 실행 시 모델 다운로드). 영상 길이에 따라 오래 걸릴 수 있어요...")
+        bar, update = _progress("받아쓰기")
+        try:
+            with bar:
+                segments, lang, duration = N.transcribe(media, out / ".notes_cache", model=whisper, language=language,
+                                                        vocabulary=N.tango_vocabulary(lib), progress=update)
+        except N.NotesError as e:
+            typer.echo(f"오류: {e}", err=True)
+            raise typer.Exit(1)
+        N.save_transcript(out, segments, lang, duration, whisper)
+    N.write_srt(segments, out / "transcript.srt")
+    typer.echo(f"언어: {N.LANGUAGE_NAMES.get(lang, lang)}, {len(segments)}줄, {N.fmt_ts(duration)}")
+
+    notes_path = out / "notes.json"
+    previous = json.loads(notes_path.read_text(encoding="utf-8")) if notes_path.exists() else {}
+    result = {k: previous.get(k) for k in ("title", "summary", "key_points", "sections", "practice", "glossary")
+              if previous.get(k) and not again}
+    problem = None
+
+    # 2–3. Claude: translation, then key points
+    need_translation = translate and lang != "ko" and any(not s.ko for s in segments)
+    need_summary = summary and not result.get("key_points")
+    if need_translation or need_summary:
+        try:
+            client = N.make_client()
+            if need_translation:
+                bar, update = _progress("번역")
+                with bar:
+                    N.translate(segments, lang, lib, client, model=model, progress=update,
+                                save=lambda: N.save_transcript(out, segments, lang, duration, whisper))
+            if need_summary:
+                typer.echo("핵심 정리 중...")
+                result = N.key_points(segments, duration, lib, client, role=role, model=model)
+        except Exception as e:  # missing key, network, API errors: keep what we have
+            problem = str(e) or type(e).__name__
+            typer.echo(f"\n번역·핵심 정리를 끝내지 못했습니다 — {problem}", err=True)
+            typer.echo("ANTHROPIC_API_KEY를 설정하고 같은 명령을 다시 실행하면 이어서 합니다 (받아쓴 자막은 재사용).", err=True)
+    if any(s.ko for s in segments):
+        N.write_srt(segments, out / "transcript.ko.srt", korean=True)
+
+    data = {
+        "version": 1,
+        "source_title": title,
+        "source_url": source_url,
+        "video": N.video_ref(out, video_file),
+        "language": lang,
+        "duration_s": round(duration, 2),
+        "role": role,
+        "model": model if result.get("key_points") else None,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "title": result.get("title") or title,
+        "summary": result.get("summary", ""),
+        "key_points": result.get("key_points", []),
+        "sections": result.get("sections", []),
+        "practice": N.practice_ids(out.resolve().name, result.get("practice", [])),
+        "glossary": result.get("glossary", []),
+        "figure_names": {k: f.name_ko for k, f in lib.figures.items()
+                         if any(k in s["figures"] for s in result.get("sections", []))},
+        "translated": any(s.ko for s in segments),
+        "incomplete": problem,
+    }
+    notes_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    (out / "notes.md").write_text(N.notes_markdown(data, lib), encoding="utf-8")
+
+    if data["key_points"]:
+        typer.echo(f"\n{data['title']}\n{data['summary']}\n")
+        for p in data["key_points"]:
+            typer.echo(f"  {N.fmt_ts(p['t']):>8}  [{N.KINDS[p['kind']]}] {p['point']}")
+    typer.echo(f"\n노트: {notes_path}")
+    typer.echo("웹에서 영상과 함께 보기: sequenceguider serve --home " + str(out.resolve().parent))
+
+
 @app.command()
 def serve(
     home: Path = typer.Option(Path("."), help="분석 결과(<이름>_sequenceguider/)와 연습 기록을 두는 폴더"),

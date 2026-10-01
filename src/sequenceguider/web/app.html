@@ -81,6 +81,53 @@ dialog::backdrop { background: rgba(0,0,0,.35); }
          padding: 8px 14px; border-radius: 10px; font-size: .9rem; opacity: 0; transition: opacity .2s; pointer-events: none; }
 .toast.show { opacity: 1; }
 .error { color: var(--warn); font-size: .88rem; margin-top: 8px; }
+.clamp { display:-webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow:hidden; }
+.badge.notes { background: var(--accent); }
+.seg { display:inline-flex; border:1px solid var(--line); border-radius: 8px; overflow:hidden; }
+.seg a { text-decoration:none; padding: 4px 10px; font-size: .85rem; font-weight: 600; color: var(--muted); }
+.seg a.on { background: var(--fg); color: var(--bg); }
+/* notes view */
+.nv { max-width: 1400px; margin: 0 auto; padding: 14px 16px 40px; display:grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 18px; }
+.nv-player { position: sticky; top: var(--head, 100px); align-self: start; }
+.nv-player video, .nv-player .yt { width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 10px; display:block; }
+.nv-player .yt iframe { width: 100%; height: 100%; border: 0; border-radius: 10px; }
+.nv-player h1 { margin: 12px 0 4px; }
+.nv-side { min-width: 0; }
+.tabs { display:flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 10px; position: sticky; top: var(--head, 100px); background: var(--bg); z-index: 2; }
+.tabs button { border: none; background: none; border-bottom: 2px solid transparent; border-radius: 0; padding: 8px 10px; font-weight: 600; color: var(--muted); }
+.tabs button.on { color: var(--fg); border-bottom-color: var(--fg); }
+.tbtn { font-variant-numeric: tabular-nums; font-size: .8rem; font-weight: 700; border-radius: 6px; padding: 1px 7px; background: var(--bg); white-space: nowrap; }
+.kp { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.kp .head { display:flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.kp .point { font-weight: 700; }
+.kp .detail { margin: 4px 0 0; }
+.kp .quote { margin: 4px 0 0; color: var(--muted); font-size: .85rem; font-style: italic; }
+.kind { font-size: .72rem; font-weight: 700; border-radius: 999px; padding: 0 8px; border: 1px solid var(--line); color: var(--muted); }
+.kind.correction { color: var(--warn); border-color: var(--warn); }
+.sec { padding: 10px 12px; border-left: 3px solid var(--line); margin-bottom: 6px; border-radius: 0 8px 8px 0; }
+.sec.now { border-left-color: var(--accent); background: var(--card); }
+.tr-tools { display:flex; gap: 8px; align-items:center; margin-bottom: 8px; flex-wrap: wrap; }
+.tr-tools input[type=search] { flex: 1; min-width: 140px; }
+.tr-tools select { width: auto; }
+.tr { max-height: calc(100vh - 220px); overflow-y: auto; }
+.line { display:grid; grid-template-columns: auto 1fr; gap: 2px 10px; padding: 5px 6px; border-radius: 8px; cursor: pointer; }
+.line:hover { background: var(--card); }
+.line.now { background: var(--card); box-shadow: inset 3px 0 0 var(--accent); }
+.line .o { font-size: .88rem; } .line .k { grid-column: 2; }
+.tr.only-ko .line .o, .tr.only-orig .line .k { display: none; }
+.tr.both .line .o { color: var(--muted); }
+mark { background: #ffe58a; color: #1d1d1f; border-radius: 3px; }
+.notice { border: 1px dashed var(--line); border-radius: 10px; padding: 10px 12px; font-size: .9rem; margin-bottom: 10px; }
+.check { display:flex; gap: 8px; align-items:flex-start; padding: 6px 0; }
+.check input { width: auto; margin-top: 4px; }
+dl.gloss dt { font-weight: 700; margin-top: 8px; } dl.gloss dd { margin: 0; }
+@media (max-width: 900px) {
+  .nv { grid-template-columns: 1fr; padding-top: 0; }
+  .nv-player { top: var(--head, 100px); z-index: 3; background: var(--bg); padding-top: 8px; }
+  .nv-player .meta-block { display: none; }
+  .tabs { position: static; }
+  .tr { max-height: none; }
+}
 </style>
 </head>
 <body>
@@ -143,8 +190,12 @@ const label = f => f.name_ko + (f.count > 1 ? ` ×${f.count}` : '');
 function lessonItems(lesson) {
   const ids = new Set();
   lesson.figures.forEach(f => f.checklist.forEach(i => ids.add(i.id)));
+  (lesson.notes?.checklist || []).forEach(i => ids.add(i.id));
   return [...ids];
 }
+const fmtHMS = t => { t = Math.max(0, Math.floor(t || 0)); const h = Math.floor(t / 3600), m = Math.floor(t % 3600 / 60), s = t % 60;
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}` : `${m}:${String(s).padStart(2, '0')}`; };
+const lessonFigures = l => l.figures.length ? l.figures : (l.notes?.figures || []).map(f => ({ ...f, count: 1 }));
 function progress(lesson) {
   const ids = lessonItems(lesson);
   return { done: ids.filter(id => id in state.checks).length, total: ids.length };
@@ -178,8 +229,10 @@ async function renderLibrary() {
     const p = progress(l), last = lastPracticed(l.id);
     const pct = p.total ? Math.round(100 * p.done / p.total) : 0;
     return `<a class="panel lesson" href="#/lesson/${encodeURIComponent(l.id)}">
+      <div class="row" style="gap:6px">${l.notes ? `<span class="badge notes">노트${l.notes.duration_s ? ' · ' + fmtHMS(l.notes.duration_s) : ''}</span>` : ''}${l.has_guide ? '<span class="badge">동작 분석</span>' : ''}</div>
       <h3>${esc(l.title)}</h3>
-      <div class="chips">${l.figures.map(f => `<span class="chip">${esc(label(f))}</span>`).join('')}</div>
+      ${l.notes?.summary ? `<div class="small muted clamp">${esc(l.notes.summary)}</div>` : ''}
+      <div class="chips">${lessonFigures(l).map(f => `<span class="chip">${esc(label(f))}</span>`).join('')}</div>
       <div><div class="row between small"><span>연습 체크리스트 ${p.done}/${p.total}</span><span class="muted">${pct}%</span></div>
       <div class="meter"><div style="width:${pct}%"></div></div></div>
       <div class="small muted">${last ? `마지막 연습 ${fmtDay(last)}` : '아직 연습 기록 없음'}</div>
@@ -189,17 +242,22 @@ async function renderLibrary() {
     <div class="row between"><h1>내 레슨</h1><button class="primary" id="new-btn">＋ 새 영상 분석</button></div>
     <section class="panel" id="new-panel" hidden>
       <form id="new-form">
+        <label class="field" for="nf-kind">만들 것</label>
+        <select id="nf-kind">
+          <option value="notes">레슨 노트: 자막 받아쓰기 · 한국어 번역 · 핵심 정리 (긴 설명 위주 레슨)</option>
+          <option value="analyze">동작 분석: 피구라별 구간 · 자세 체크 (시퀀스 연습 영상)</option>
+        </select>
         <div class="form-grid">
           <div><label class="field" for="nf-source">유튜브 링크 또는 영상 파일 경로</label>
             <input id="nf-source" placeholder="https://youtu.be/... 또는 C:\\videos\\practice.mp4" required></div>
           <div><label class="field" for="nf-role">관점</label>
             <select id="nf-role"><option value="all">리더·팔로워 공통</option><option value="leader">리더</option><option value="follower">팔로워</option></select></div>
-          <div><label class="field" for="nf-view">촬영 방향</label>
+          <div class="analyze-only"><label class="field" for="nf-view">촬영 방향</label>
             <select id="nf-view"><option value="side">측면 (권장)</option><option value="front">정면</option></select></div>
         </div>
-        <label class="field" for="nf-seq">시퀀스 순서 <span class="muted small">(유튜브는 비워 두면 챕터·설명란에서 읽어요)</span></label>
-        <input id="nf-seq" placeholder="살리다, 오초 아뜨라스 x3, 푸에라 데 에헤">
-        <p class="small muted">본인 영상이나 허락받은 영상만, 개인 학습용으로 사용하세요. 분석은 몇 분 걸릴 수 있어요.</p>
+        <div class="analyze-only"><label class="field" for="nf-seq">시퀀스 순서 <span class="muted small">(유튜브는 비워 두면 챕터·설명란에서 읽어요)</span></label>
+        <input id="nf-seq" placeholder="살리다, 오초 아뜨라스 x3, 푸에라 데 에헤"></div>
+        <p class="small muted" id="nf-hint"></p>
         <div class="error" id="nf-error"></div>
         <div class="row" style="justify-content:flex-end"><button class="primary">분석 시작</button></div>
       </form>
@@ -211,11 +269,21 @@ async function renderLibrary() {
   </main>`;
   const panel = $('#new-panel');
   $('#new-btn').onclick = () => { panel.hidden = !panel.hidden; if (!panel.hidden) $('#nf-source').focus(); };
+  const kindChanged = () => {
+    const notes = $('#nf-kind').value === 'notes';
+    view.querySelectorAll('.analyze-only').forEach(el => el.hidden = notes);
+    $('#nf-hint').textContent = (notes
+      ? '말을 받아 적고(내 컴퓨터에서) Claude로 번역·정리합니다. 1시간 영상이면 받아쓰기만 수십 분 걸릴 수 있어요. 번역·정리에는 ANTHROPIC_API_KEY가 필요해요. '
+      : '분석은 몇 분 걸릴 수 있어요. ') + '본인 영상이나 허락받은 영상만, 개인 학습용으로 사용하세요.';
+    store.set('sg.newKind', $('#nf-kind').value);
+  };
+  $('#nf-kind').value = store.get('sg.newKind') || 'notes';
+  $('#nf-kind').onchange = kindChanged; kindChanged();
   $('#new-form').onsubmit = async e => {
     e.preventDefault();
     $('#nf-error').textContent = '';
     try {
-      await api('/api/jobs', { method: 'POST', body: { source: $('#nf-source').value, sequence: $('#nf-seq').value,
+      await api('/api/jobs', { method: 'POST', body: { kind: $('#nf-kind').value, source: $('#nf-source').value, sequence: $('#nf-seq').value,
                                                          role: $('#nf-role').value, view: $('#nf-view').value } });
       $('#nf-source').value = ''; $('#nf-seq').value = '';
       pollJobs();
@@ -233,7 +301,7 @@ async function pollJobs(once) {
   state.jobs = await api('/api/jobs');
   const running = state.jobs.filter(j => j.status === 'running').length;
   $('#jobs').innerHTML = state.jobs.map(j => `<div class="job">
-    <div class="row"><span class="badge ${j.status}">${{running: '분석 중', done: '완료', failed: '실패'}[j.status]}</span>
+    <div class="row"><span class="badge ${j.status}">${{running: j.kind === 'notes' ? '노트 만드는 중' : '분석 중', done: '완료', failed: '실패'}[j.status]}</span>
       <span class="small" style="word-break:break-all">${esc(j.source)}</span>
       ${j.lesson ? `<a class="small" href="#/lesson/${encodeURIComponent(j.lesson)}">열기 →</a>` : ''}</div>
     <pre>${esc(j.log.split('\n').slice(-6).join('\n') || '시작하는 중...')}</pre></div>`).join('');
@@ -247,9 +315,11 @@ function timerStart() { const v = store.get('sg.timer.' + currentLesson?.id); re
 function renderLessonBar() {
   if (!currentLesson) { lessonBar.innerHTML = ''; return; }
   const p = progress(currentLesson), started = timerStart();
+  const both = currentLesson.notes && currentLesson.has_guide, id = encodeURIComponent(currentLesson.id);
   lessonBar.innerHTML = `<div class="lesson-bar">
     <a href="#/" class="link small muted" style="text-decoration:none">← 레슨 목록</a>
     <span class="title">${esc(currentLesson.title)}</span>
+    ${both ? `<span class="seg"><a href="#/lesson/${id}" class="${lessonMode === 'notes' ? 'on' : ''}">노트</a><a href="#/lesson/${id}/guide" class="${lessonMode === 'guide' ? 'on' : ''}">동작 분석</a></span>` : ''}
     <span class="small muted">체크 ${p.done}/${p.total}</span>
     ${started ? `<span class="timer" id="timer"></span><button class="primary" id="timer-stop">끝내고 기록</button>`
               : `<button id="timer-start">연습 시작</button><button class="primary" id="log-open">기록 남기기</button>`}
@@ -264,11 +334,190 @@ function renderLessonBar() {
     $('#log-open').onclick = () => openLog(30, false);
   }
 }
-function renderLesson(id) {
+let lessonMode = 'guide';
+function renderLesson(id, mode) {
   currentLesson = state.lessons.find(l => l.id === id);
   if (!currentLesson) { view.innerHTML = `<main><div class="panel empty">레슨을 찾을 수 없어요. <a href="#/">목록으로</a></div></main>`; return; }
+  lessonMode = currentLesson.notes && (mode !== 'guide' || !currentLesson.has_guide) ? 'notes' : 'guide';
   renderLessonBar();
+  document.documentElement.style.setProperty('--head', $('header.top').offsetHeight + 'px');
+  if (lessonMode === 'notes') return renderNotes(currentLesson);
   view.innerHTML = `<iframe class="report" src="/lessons/${encodeURIComponent(id)}/index.html" title="${esc(currentLesson.title)}"></iframe>`;
+}
+
+// ---------------------------------------------------------------- notes (sequenceguider notes)
+const KINDS = { correction: '교정', principle: '원리', technique: '테크닉', connection: '연결·아브라소', musicality: '음악성', exercise: '연습법', other: '기타' };
+const ROLE_KO = { leader: '리더', follower: '팔로워' };
+let notesTimer = null;
+function youtubeId(url) { const m = /(?:v=|youtu\.be\/|shorts\/|embed\/|live\/)([\w-]{6,})/.exec(url || ''); return m ? m[1] : null; }
+function loadYouTubeApi() {
+  if (window.YT?.Player) return Promise.resolve();
+  return new Promise(resolve => {
+    const prev = window.onYouTubeIframeAPIReady;
+    window.onYouTubeIframeAPIReady = () => { prev?.(); resolve(); };
+    if (!document.querySelector('script[src*="youtube.com/iframe_api"]')) {
+      const s = document.createElement('script'); s.src = 'https://www.youtube.com/iframe_api'; document.head.append(s);
+    }
+  });
+}
+function vttFrom(segments) {  // Korean subtitles on the <video> itself, built from the transcript
+  const ts = t => { const ms = Math.round(t * 1000), h = Math.floor(ms / 3600000), m = Math.floor(ms / 60000) % 60, s = Math.floor(ms / 1000) % 60;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(ms % 1000).padStart(3, '0')}`; };
+  return 'WEBVTT\n\n' + segments.filter(s => s.ko).map(s => `${ts(s.start)} --> ${ts(s.end)}\n${s.ko.replace(/-->/g, '→')}\n`).join('\n');
+}
+
+async function renderNotes(lesson) {
+  const base = `/lessons/${encodeURIComponent(lesson.id)}`;
+  view.innerHTML = `<main><div class="panel empty muted">노트 불러오는 중...</div></main>`;
+  let notes, tr;
+  try {
+    [notes, tr] = await Promise.all([fetch(base + '/notes.json').then(r => r.json()),
+                                     fetch(base + '/transcript.json').then(r => r.ok ? r.json() : { segments: [] })]);
+  } catch (e) { view.innerHTML = `<main><div class="panel error">노트를 읽지 못했어요: ${esc(e.message)}</div></main>`; return; }
+  if (currentLesson !== lesson) return;  // navigated away meanwhile
+  const segs = tr.segments || [], hasKo = segs.some(s => s.ko), kp = notes.key_points || [];
+  const ytId = !notes.video && youtubeId(notes.source_url);
+  const tabs = [['points', `핵심 ${kp.length || ''}`], ['flow', '흐름'], ['transcript', '자막'], ['practice', '연습·용어']];
+  let tab = store.get('sg.notesTab') || (kp.length ? 'points' : 'transcript');
+  if (!kp.length && tab !== 'transcript') tab = 'transcript';
+  const lang = { ko: '한국어', es: '스페인어', en: '영어' }[notes.language] || notes.language || '';
+
+  view.innerHTML = `<div class="nv">
+    <div class="nv-player">
+      ${notes.video ? `<video id="nv-video" controls preload="metadata" playsinline src="${base}/notes-video"></video>`
+        : ytId ? `<div class="yt"><div id="nv-yt"></div></div>`
+        : `<div class="notice">영상 파일을 찾지 못했어요. 시간을 눌러도 재생되지 않지만 노트는 볼 수 있어요.</div>`}
+      <div class="meta-block">
+        <h1>${esc(notes.title || lesson.title)}</h1>
+        <div class="small muted">${[lang && lang + ' 레슨', notes.duration_s && fmtHMS(notes.duration_s), hasKo && '한국어 자막', ROLE_KO[notes.role] && ROLE_KO[notes.role] + ' 관점'].filter(Boolean).join(' · ')}</div>
+        ${notes.summary ? `<p>${esc(notes.summary)}</p>` : ''}
+      </div>
+    </div>
+    <div class="nv-side">
+      <div class="tabs">${tabs.map(([k, l]) => `<button data-tab="${k}" class="${k === tab ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <div id="nv-pane"></div>
+    </div>
+  </div>`;
+
+  // -- player: <video> for local files, the YouTube player for links
+  let player = { seek() {}, time: () => 0 };
+  const video = $('#nv-video');
+  if (video) {
+    if (hasKo) {
+      const track = document.createElement('track');
+      Object.assign(track, { kind: 'subtitles', srclang: 'ko', label: '한국어', default: true,
+                             src: URL.createObjectURL(new Blob([vttFrom(segs)], { type: 'text/vtt' })) });
+      video.append(track);
+    }
+    player = { seek(t) { video.currentTime = t; video.play().catch(() => {}); }, time: () => video.currentTime };
+  } else if (ytId) {
+    loadYouTubeApi().then(() => {
+      if (!$('#nv-yt')) return;
+      const yt = new YT.Player('nv-yt', { videoId: ytId, playerVars: { rel: 0, playsinline: 1 } });
+      player = { seek(t) { yt.seekTo?.(t, true); yt.playVideo?.(); }, time: () => yt.getCurrentTime?.() || 0 };
+    });
+  }
+  const timeBtn = t => `<button class="tbtn" data-t="${t}" title="여기부터 재생">${fmtHMS(t)}</button>`;
+  view.onclick = e => {
+    const b = e.target.closest('[data-t]');
+    if (b) { player.seek(+b.dataset.t); if (window.innerWidth <= 900) window.scrollTo({ top: 0, behavior: 'smooth' }); }
+  };
+
+  const pane = $('#nv-pane');
+  const panes = {
+    points() {
+      if (!kp.length) return `<div class="notice">${notes.incomplete ? `핵심 정리를 끝내지 못했어요: ${esc(notes.incomplete)}<br>` : '아직 핵심 정리가 없어요. '}
+        ANTHROPIC_API_KEY를 설정하고 <code>sequenceguider notes</code>를 다시 실행하면 받아쓴 자막을 그대로 써서 정리해요.</div>`;
+      const kinds = [...new Set(kp.map(p => p.kind))];
+      const f = store.get('sg.notesKind');
+      const shown = kp.filter(p => !f || f === 'all' || p.kind === f);
+      return `<div class="chips" style="margin-bottom:6px">${['all', ...kinds].map(k =>
+          `<button class="chip ${(f || 'all') === k ? 'primary' : ''}" data-kind="${k}">${k === 'all' ? '전체' : KINDS[k] || k} ${k === 'all' ? kp.length : kp.filter(p => p.kind === k).length}</button>`).join('')}</div>
+        ${shown.map(p => `<div class="kp"><div class="head">${timeBtn(p.t)}<span class="kind ${p.kind}">${KINDS[p.kind] || p.kind}${ROLE_KO[p.role] ? ' · ' + ROLE_KO[p.role] : ''}</span></div>
+          <div class="point">${esc(p.point)}</div>${p.detail ? `<p class="detail">${esc(p.detail)}</p>` : ''}${p.quote ? `<p class="quote">“${esc(p.quote)}”</p>` : ''}</div>`).join('')}`;
+    },
+    flow() {
+      const S = notes.sections || [], names = notes.figure_names || {};
+      if (!S.length) return `<div class="notice">레슨 흐름은 핵심 정리와 함께 만들어져요.</div>`;
+      return S.map((s, i) => `<div class="sec" data-sec="${i}"><div class="row">${timeBtn(s.start)}<span class="small muted">~ ${fmtHMS(s.end)}</span><b>${esc(s.title)}</b></div>
+        ${s.summary ? `<div class="small" style="margin-top:4px">${esc(s.summary)}</div>` : ''}
+        ${s.figures?.length ? `<div class="chips" style="margin-top:6px">${s.figures.map(k => `<span class="chip">${esc(names[k] || k)}</span>`).join('')}</div>` : ''}</div>`).join('');
+    },
+    transcript() {
+      if (!segs.length) return `<div class="notice">받아 적은 자막이 없어요.</div>`;
+      const mode = store.get('sg.trMode') || (hasKo ? 'both' : 'orig');
+      return `<div class="tr-tools"><input type="search" id="tr-q" placeholder="자막 검색 (원문·번역)">
+          ${hasKo ? `<select id="tr-mode"><option value="both">원문+번역</option><option value="ko">번역만</option><option value="orig">원문만</option></select>` : ''}
+          <label class="small row" style="gap:4px"><input type="checkbox" id="tr-follow" style="width:auto" ${store.get('sg.trFollow') === '0' ? '' : 'checked'}>따라가기</label></div>
+        <div class="tr ${hasKo ? { both: 'both', ko: 'only-ko', orig: 'only-orig' }[mode] : ''}" id="tr">${segs.map((s, i) =>
+          `<div class="line" data-i="${i}" data-t="${s.start}"><span class="tbtn">${fmtHMS(s.start)}</span><span class="o">${esc(s.text)}</span>${s.ko ? `<span class="k">${esc(s.ko)}</span>` : ''}</div>`).join('')}</div>`;
+    },
+    practice() {
+      const P = notes.practice || [], G = notes.glossary || [];
+      if (!P.length && !G.length) return `<div class="notice">연습 체크리스트와 용어 풀이는 핵심 정리와 함께 만들어져요.</div>`;
+      return `${P.length ? `<h2 style="margin-top:4px">연습할 것</h2>${P.map(p => `<label class="check"><input type="checkbox" data-check="${esc(p.id)}" ${p.id in state.checks ? 'checked' : ''}>
+          <span>${esc(p.text)} ${timeBtn(p.t)}</span></label>`).join('')}` : ''}
+        ${G.length ? `<h2>용어</h2><dl class="gloss">${G.map(g => `<dt>${esc(g.term)}</dt><dd>${esc(g.meaning)}</dd>`).join('')}</dl>` : ''}`;
+    },
+  };
+  function show(k) {
+    tab = k; store.set('sg.notesTab', k);
+    view.querySelectorAll('[data-tab]').forEach(b => b.classList.toggle('on', b.dataset.tab === k));
+    pane.innerHTML = panes[k]();
+    pane.querySelectorAll('[data-kind]').forEach(b => b.onclick = () => { store.set('sg.notesKind', b.dataset.kind); show('points'); });
+    pane.querySelectorAll('[data-check]').forEach(c => c.onchange = () => SG.setCheck(c.dataset.check, c.checked));
+    const q = $('#tr-q');
+    if (q) {
+      const lines = [...pane.querySelectorAll('.line')];
+      q.oninput = () => {
+        const term = q.value.trim().toLowerCase();
+        lines.forEach((el, i) => {
+          const s = segs[i], hit = !term || (s.text + ' ' + (s.ko || '')).toLowerCase().includes(term);
+          el.hidden = !hit;
+          const mark = t => { if (!term) return esc(t); const lo = t.toLowerCase(); let out = '', a = 0, b;
+            while ((b = lo.indexOf(term, a)) !== -1) { out += esc(t.slice(a, b)) + '<mark>' + esc(t.slice(b, b + term.length)) + '</mark>'; a = b + term.length; }
+            return out + esc(t.slice(a)); };
+          if (hit) { el.querySelector('.o').innerHTML = mark(s.text); const k = el.querySelector('.k'); if (k) k.innerHTML = mark(s.ko); }
+        });
+      };
+      const sel = $('#tr-mode');
+      if (sel) { sel.value = store.get('sg.trMode') || 'both';
+        sel.onchange = () => { store.set('sg.trMode', sel.value); $('#tr').className = 'tr ' + { both: 'both', ko: 'only-ko', orig: 'only-orig' }[sel.value]; }; }
+      $('#tr-follow').onchange = e => store.set('sg.trFollow', e.target.checked ? '1' : '0');
+    }
+  }
+  view.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => show(b.dataset.tab));
+  show(tab);
+
+  // follow playback: highlight the line / section being said now
+  let lastLine = -1, lastSec = -1;
+  clearInterval(notesTimer);
+  notesTimer = setInterval(() => {
+    if (!document.body.contains(pane)) return clearInterval(notesTimer);
+    const t = player.time();
+    let i = -1;
+    for (let lo = 0, hi = segs.length - 1; lo <= hi;) { const mid = (lo + hi) >> 1; if (segs[mid].start <= t) { i = mid; lo = mid + 1; } else hi = mid - 1; }
+    if (i !== lastLine) {
+      pane.querySelector('.line.now')?.classList.remove('now');
+      const el = pane.querySelector(`.line[data-i="${i}"]`);
+      if (el) {
+        el.classList.add('now');
+        const box = $('#tr'), q = $('#tr-q');
+        if ($('#tr-follow')?.checked && !q?.value && box) {
+          // inside the transcript box on wide screens; the page itself scrolls on phones
+          if (box.scrollHeight > box.clientHeight) box.scrollTop = el.offsetTop - box.offsetTop - box.clientHeight / 3;
+          else el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }
+      }
+      lastLine = i;
+    }
+    const sec = (notes.sections || []).findIndex(s => t >= s.start && t < s.end);
+    if (sec !== lastSec) {
+      pane.querySelector('.sec.now')?.classList.remove('now');
+      pane.querySelector(`.sec[data-sec="${sec}"]`)?.classList.add('now');
+      lastSec = sec;
+    }
+  }, 400);
 }
 
 let logFromTimer = false;
@@ -389,7 +638,11 @@ async function route() {
   document.querySelectorAll('nav.main a').forEach(a =>
     a.classList.toggle('active', a.dataset.nav === (h.startsWith('#/records') ? 'records' : 'library')));
   try { await load(); } catch (e) { view.innerHTML = `<main><div class="panel error">서버에 연결하지 못했어요: ${esc(e.message)}</div></main>`; return; }
-  if (h.startsWith('#/lesson/')) return renderLesson(decodeURIComponent(h.slice('#/lesson/'.length)));
+  clearInterval(notesTimer); view.onclick = null;
+  if (h.startsWith('#/lesson/')) {
+    const [id, mode] = h.slice('#/lesson/'.length).split('/');
+    return renderLesson(decodeURIComponent(id), mode);
+  }
   currentLesson = null;
   if (h.startsWith('#/records')) return renderRecords();
   return renderLibrary();

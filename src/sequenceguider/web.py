@@ -1,7 +1,7 @@
 """`sequenceguider serve`: a local web app to learn from analysed videos and keep practice records.
 
 Everything lives in one home folder:
-    <home>/<name>_sequenceguider/   one analysed video each (what `analyze` writes)
+    <home>/<name>_sequenceguider/   one lesson each (what `analyze` and/or `notes` write)
     <home>/records.db               checklist ticks and practice sessions (records.py)
     <home>/.jobs/<id>.log           output of analyses started from the web page
 
@@ -29,19 +29,30 @@ from sequenceguider.records import Records
 
 APP_HTML = Path(__file__).parent / "web" / "app.html"
 _RANGE = re.compile(r"bytes=(\d*)-(\d*)$")
+VIDEO_EXTS = {".mp4", ".m4v", ".mov", ".webm", ".mkv", ".ogv"}
+
+
+def _read_json(path: Path) -> dict | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
 def find_lessons(home: Path) -> list[dict]:
-    """Every analysed video directly under `home`, newest first."""
+    """Every lesson folder directly under `home`, newest first.
+
+    A folder is a lesson if `analyze` wrote its guide there (result.json + index.html),
+    `notes` wrote its notes (notes.json), or both.
+    """
     lessons = []
-    for result in home.glob("*/result.json"):
-        folder = result.parent
-        if not (folder / "index.html").is_file():
+    for folder in sorted(p for p in home.iterdir() if p.is_dir() and not p.name.startswith(".")):
+        result = folder / "result.json"
+        data = _read_json(result) if (folder / "index.html").is_file() else None
+        notes = _read_json(folder / "notes.json")
+        if data is None and notes is None:
             continue
-        try:
-            data = json.loads(result.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
+        data = data or {}
         figures = []
         for f in data.get("figures", []):
             lesson = f.get("lesson") or {}
@@ -51,13 +62,23 @@ def find_lessons(home: Path) -> list[dict]:
                 "key_point": lesson.get("key_point", ""),
                 "checklist": lesson.get("checklist", []),
             })
+        stamps = [p.stat().st_mtime for p in (result, folder / "notes.json") if p.is_file()]
         lessons.append({
             "id": folder.name,
-            "title": data.get("title") or folder.name.removesuffix("_sequenceguider"),
-            "source_url": data.get("source_url"),
+            "title": (notes or {}).get("title") or data.get("title") or folder.name.removesuffix("_sequenceguider"),
+            "source_url": data.get("source_url") or (notes or {}).get("source_url"),
             "role": data.get("role", "all"),
             "figures": figures,
-            "updated_at": datetime.fromtimestamp(result.stat().st_mtime).isoformat(timespec="seconds"),
+            "has_guide": bool(data),
+            "notes": None if notes is None else {
+                "summary": notes.get("summary", ""),
+                "duration_s": notes.get("duration_s"),
+                "key_points": len(notes.get("key_points", [])),
+                "figures": [{"figure": k, "name_ko": (notes.get("figure_names") or {}).get(k, k)}
+                            for k in dict.fromkeys(k for s in notes.get("sections", []) for k in s.get("figures", []))],
+                "checklist": [{"id": p["id"], "text": p.get("text", "")} for p in notes.get("practice", []) if "id" in p],
+            },
+            "updated_at": datetime.fromtimestamp(max(stamps)).isoformat(timespec="seconds"),
         })
     return sorted(lessons, key=lambda x: x["updated_at"], reverse=True)
 
@@ -65,6 +86,7 @@ def find_lessons(home: Path) -> list[dict]:
 @dataclass
 class Job:
     id: str
+    kind: str  # analyze | notes
     source: str
     sequence: str
     role: str
@@ -86,24 +108,36 @@ class Jobs:
         self.command = [sys.executable, "-m", "sequenceguider.cli"]  # tests swap in a stand-in
         self._lock = threading.Lock()
 
-    def start(self, source: str, sequence: str = "", role: str = "all", view: str = "side") -> Job:
-        source = source.strip()
+    def start(self, source: str, sequence: str = "", role: str = "all", view: str = "side",
+              kind: str = "analyze") -> Job:
+        source = source.strip().strip('"')
         if not source:
             raise ValueError("유튜브 링크나 영상 파일 경로를 넣어 주세요")
         if role not in ("all", "leader", "follower") or view not in ("side", "front"):
             raise ValueError("역할이나 촬영 방향 값이 올바르지 않습니다")
+        if kind not in ("analyze", "notes"):
+            raise ValueError("만들 것이 올바르지 않습니다")
         if not re.match(r"^https?://", source, re.IGNORECASE):
             path = Path(source).expanduser()
             if not path.is_file():
                 raise ValueError(f"파일이 없습니다: {source}")
-            if not sequence.strip():
+            if kind == "analyze" and not sequence.strip():
                 raise ValueError("파일 영상은 시퀀스 순서를 적어 주세요")
             source = str(path.resolve())
-        cmd = [*self.command, "analyze", source, "--role", role, "--view", view]
-        if sequence.strip():
-            cmd += ["--sequence", sequence.strip()]
+            # results go in the home folder, where the library looks, not next to the video
+            out = self.home / f"{path.stem}_sequenceguider"
+        else:
+            out = None
+        if kind == "notes":
+            cmd = [*self.command, "notes", source, "--role", role]
+        else:
+            cmd = [*self.command, "analyze", source, "--role", role, "--view", view]
+            if sequence.strip():
+                cmd += ["--sequence", sequence.strip()]
+        if out is not None:
+            cmd += ["--out", str(out)]
         self.dir.mkdir(parents=True, exist_ok=True)
-        job = Job(id=uuid.uuid4().hex[:8], source=source, sequence=sequence.strip(), role=role, view=view,
+        job = Job(id=uuid.uuid4().hex[:8], kind=kind, source=source, sequence=sequence.strip(), role=role, view=view,
                   started_at=datetime.now().isoformat(timespec="seconds"))
         log = open(self.dir / f"{job.id}.log", "wb")
         env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
@@ -123,7 +157,7 @@ class Jobs:
         job.log = "\n".join(ln for ln in lines if ln.strip())[-4000:]
         if job.status == "running" and job._proc is not None and job._proc.poll() is not None:
             job.status = "done" if job._proc.returncode == 0 else "failed"
-            if m := re.search(r"리포트: (.+)", raw):
+            if m := re.search(r"(?:리포트|노트): (.+)", raw):
                 job.lesson = Path(m.group(1).strip()).parent.name
 
     def list(self) -> list[dict]:
@@ -147,6 +181,22 @@ class App:
         base = (self.home / lesson).resolve()
         path = (base / rel).resolve()
         if base.parent != self.home or not path.is_relative_to(base) or not path.is_file():
+            return None
+        return path
+
+
+    def notes_video(self, lesson: str) -> Path | None:
+        """The lesson video notes.json points at. It may live outside the lesson folder
+        (a 2-hour file isn't copied), so this is the one file served from elsewhere."""
+        base = (self.home / lesson).resolve()
+        if base.parent != self.home:
+            return None
+        notes = _read_json(base / "notes.json") or {}
+        ref = notes.get("video")
+        if not ref:
+            return None
+        path = (base / ref).resolve()
+        if path.suffix.lower() not in VIDEO_EXTS or not path.is_file():
             return None
         return path
 
@@ -223,6 +273,9 @@ def make_handler(app: App):
             try:
                 if method == "GET" and path in ("/", "/index.html"):
                     return self._file(APP_HTML)
+                if method == "GET" and (m := re.fullmatch(r"/lessons/([^/]+)/notes-video", path)):
+                    f = app.notes_video(m.group(1))
+                    return self._file(f) if f else self._error(404, "영상 파일을 찾지 못했습니다")
                 if method == "GET" and path.startswith("/lessons/"):
                     lesson, _, rel = path[len("/lessons/"):].partition("/")
                     f = app.lesson_file(lesson, rel or "index.html")
@@ -253,7 +306,8 @@ def make_handler(app: App):
                 if path == "/api/jobs" and method == "POST":
                     b = self._body()
                     job = app.jobs.start(str(b.get("source", "")), str(b.get("sequence", "")),
-                                         str(b.get("role", "all")), str(b.get("view", "side")))
+                                         str(b.get("role", "all")), str(b.get("view", "side")),
+                                         str(b.get("kind", "analyze")))
                     return self._json({"id": job.id}, 201)
                 return self._error(404, "없는 주소입니다")
             except (ValueError, KeyError, json.JSONDecodeError) as e:
