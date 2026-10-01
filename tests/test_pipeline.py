@@ -63,6 +63,32 @@ class TestFigures:
         assert all(c.role in ("all", "leader") for c in fig.cautions_for("leader"))
         assert len(fig.cautions_for("all")) == len(fig.cautions)
 
+    def test_every_figure_has_a_lesson(self):
+        for fig in LIB.figures.values():
+            lesson = fig.lesson()
+            assert fig.key_point and lesson.key_point == fig.key_point, fig.key
+            assert fig.drills, fig.key
+            assert 0 < len(lesson.cautions) <= 2
+            assert len({i.id for i in lesson.checklist}) == len(lesson.checklist)
+
+    def test_lesson_filters_by_role_and_splits_mistakes(self):
+        fig = LIB.figures["ocho_atras"]
+        leader = fig.lesson("leader")
+        assert all(c.role in ("all", "leader") for c in leader.cautions + leader.mistakes)
+        assert all(i.role in ("all", "leader") for i in leader.checklist)
+        follower = fig.lesson("follower")
+        assert any("엉덩이" in c.text for c in follower.mistakes)
+        assert not any(c.mistake for c in follower.cautions + follower.more_cautions)
+        # an id names the same item whatever the role, so a tick means the same thing in every view
+        by_id = {i.id: i.text for r in ("all", "leader", "follower") for i in fig.lesson(r).checklist}
+        for r in ("all", "leader", "follower"):
+            assert all(by_id[i.id] == i.text for i in fig.lesson(r).checklist)
+
+    def test_prerequisite_names_resolved(self):
+        fig = LIB.figures["giro"]
+        assert fig.prerequisites == ("ocho_adelante", "ocho_atras")
+        assert fig.prerequisite_names == ("오초 아델란떼", "오초 아뜨라스")
+
     def test_text_guide_mentions_user_example(self):
         text = text_guide(parse_sequence("뿌에라 에헤", LIB))
         assert "상체가 빠지지 않게" in text and "골반이 뒤로" in text
@@ -222,6 +248,12 @@ class TestReport:
         data = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
         assert [f["figure"] for f in data["figures"]] == ["salida_cruzada", "ocho_atras"]
         assert data["steps_detected"] == 9
+        lesson = data["figures"][1]["lesson"]
+        assert lesson["key_point"] == LIB.figures["ocho_atras"].key_point
+        assert lesson["checklist"] and all(i["id"].startswith("ocho_atras.") for i in lesson["checklist"])
+        assert 'data-tab="learn"' in html and "한 장 요약" in html
+        assert "미리 할 줄 알면 좋은 것:</b> 까미나따" in html
+        assert f"data-id='{lesson['checklist'][0]['id']}'" in html
 
     def test_pose_cache_roundtrip(self, tmp_path):
         tr = walk(2)

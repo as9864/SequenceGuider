@@ -8,6 +8,7 @@ A sequence is written the way dancers say it:
   pins where that figure starts when the automatic split gets it wrong
 """
 
+import dataclasses
 import difflib
 import re
 import unicodedata
@@ -24,6 +25,36 @@ ROLES = ("all", "leader", "follower")
 class Caution:
     role: str
     text: str
+    mistake: bool = False  # a common mistake ("엉덩이를 빼지 마세요") rather than a thing to do
+
+
+@dataclass(frozen=True)
+class Drill:
+    role: str
+    text: str
+
+
+@dataclass(frozen=True)
+class ChecklistItem:
+    id: str  # "<figure>.<kind>.<n>": stable, so a tick carries over to other videos with the figure
+    kind: str  # "drill" | "self"
+    role: str
+    text: str
+
+
+@dataclass(frozen=True)
+class Lesson:
+    """What the learn view shows for a figure, already filtered by role.
+    YAML order is priority: the first cautions are the ones that matter most."""
+
+    key_point: str
+    cautions: list[Caution]  # shown open, at most LESSON_CAUTIONS
+    more_cautions: list[Caution]  # folded under "더 보기"
+    mistakes: list[Caution]
+    checklist: list[ChecklistItem]
+
+
+LESSON_CAUTIONS = 2
 
 
 DEFAULT = "default"  # CheckSpec bound not given: use the check's own default
@@ -51,11 +82,34 @@ class Figure:
     summary: str
     cautions: tuple[Caution, ...]
     checks: tuple[CheckSpec, ...]
+    key_point: str = ""
+    prerequisites: tuple[str, ...] = ()  # figure keys to know first
+    prerequisite_names: tuple[str, ...] = ()  # their name_ko, filled in by FigureLibrary.load
+    drills: tuple[Drill, ...] = ()
 
     def cautions_for(self, role: str) -> list[Caution]:
         if role == "all":
             return list(self.cautions)
         return [c for c in self.cautions if c.role in ("all", role)]
+
+    def lesson(self, role: str = "all") -> Lesson:
+        def fits(r: str) -> bool:
+            return role == "all" or r in ("all", role)
+
+        tips = [c for c in self.cautions_for(role) if not c.mistake]
+        checklist = [ChecklistItem(f"{self.key}.drill.{i}", "drill", d.role, d.text)
+                     for i, d in enumerate(self.drills) if fits(d.role)]
+        # the cautions shown open double as "did I do this?" self-checks
+        shown = tips[:LESSON_CAUTIONS]
+        checklist += [ChecklistItem(f"{self.key}.self.{self.cautions.index(c)}", "self", c.role, c.text)
+                      for c in shown]
+        return Lesson(
+            key_point=self.key_point or self.summary,
+            cautions=shown,
+            more_cautions=tips[LESSON_CAUTIONS:],
+            mistakes=[c for c in self.cautions_for(role) if c.mistake],
+            checklist=checklist,
+        )
 
 
 @dataclass
@@ -123,11 +177,11 @@ class FigureLibrary:
             raw = yaml.safe_load(f)["figures"]
         figures = {}
         for key, spec in raw.items():
-            cautions = []
-            for c in spec.get("cautions", []):
+            for c in [*spec.get("cautions", []), *spec.get("drills", [])]:
                 if c["role"] not in ROLES:
                     raise ValueError(f"{key}: unknown role {c['role']!r}")
-                cautions.append(Caution(role=c["role"], text=c["text"]))
+            cautions = [Caution(role=c["role"], text=c["text"], mistake=bool(c.get("mistake", False)))
+                        for c in spec.get("cautions", [])]
             figures[key] = Figure(
                 key=key,
                 name_ko=spec["name_ko"],
@@ -137,7 +191,16 @@ class FigureLibrary:
                 summary=spec.get("summary", ""),
                 cautions=tuple(cautions),
                 checks=tuple(CheckSpec(**c) for c in spec.get("checks", [])),
+                key_point=spec.get("key_point", ""),
+                prerequisites=tuple(spec.get("prerequisites", [])),
+                drills=tuple(Drill(role=d["role"], text=d["text"]) for d in spec.get("drills", [])),
             )
+        for key, fig in figures.items():
+            for pre in fig.prerequisites:
+                if pre not in figures:
+                    raise ValueError(f"{key}: unknown prerequisite {pre!r}")
+            names = tuple(figures[pre].name_ko for pre in fig.prerequisites)
+            figures[key] = dataclasses.replace(fig, prerequisite_names=names)
         return cls(figures)
 
     def resolve(self, name: str) -> Figure:

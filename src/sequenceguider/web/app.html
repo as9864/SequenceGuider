@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SequenceGuider</title>
+<style>
+:root { --bg:#f7f7f5; --card:#fff; --fg:#1d1d1f; --muted:#6b6b70; --line:#e3e3e0; --accent:#5b8def;
+        --ok:#2f9e57; --warn:#d8453a; --heat0:#ebebe7; --heat1:#c6d8fb; --heat2:#8fb2f5; --heat3:#5b8def; --heat4:#2f5fc4; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#141416; --card:#1e1e22; --fg:#ececef; --muted:#9a9aa2; --line:#2e2e34;
+          --heat0:#26262b; --heat1:#233a66; --heat2:#2f5299; --heat3:#4777d6; --heat4:#7aa2f2; }
+}
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); line-height:1.5;
+       font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif; }
+a { color: inherit; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor:pointer; border:1px solid var(--line); background:var(--card); border-radius:8px; padding:6px 12px; }
+button:hover { border-color: var(--muted); }
+button.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); font-weight: 600; }
+button.link { border: none; background: none; padding: 2px 4px; color: var(--muted); }
+input, select, textarea { background: var(--bg); border:1px solid var(--line); border-radius:8px; padding:7px 10px; width:100%; }
+textarea { resize: vertical; min-height: 64px; }
+label.field { display:block; font-size:.85rem; font-weight:600; margin: 10px 0 4px; }
+.muted { color: var(--muted); } .small { font-size: .82rem; }
+header.top { position: sticky; top:0; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line); }
+.bar { max-width: 1100px; margin: 0 auto; padding: 10px 16px; display:flex; align-items:center; gap: 14px; }
+.brand { font-weight: 800; letter-spacing: -.01em; margin-right: auto; text-decoration: none; }
+nav.main a { text-decoration: none; padding: 6px 10px; border-radius: 8px; color: var(--muted); font-weight: 600; }
+nav.main a.active { color: var(--fg); background: var(--card); border: 1px solid var(--line); }
+main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 64px; }
+h1 { font-size: 1.4rem; margin: 0 0 12px; } h2 { font-size: 1.1rem; margin: 26px 0 10px; }
+.panel { background: var(--card); border:1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+.grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+.lesson { display:flex; flex-direction: column; gap: 10px; text-decoration: none; cursor: pointer; }
+.lesson:hover { border-color: var(--muted); }
+.lesson h3 { margin: 0; font-size: 1rem; }
+.chips { display:flex; flex-wrap: wrap; gap: 4px; }
+.chip { white-space: nowrap; font-size: .78rem; border:1px solid var(--line); border-radius: 999px; padding: 1px 8px; background: var(--bg); }
+.meter { height: 8px; border-radius: 99px; background: var(--line); overflow: hidden; }
+.meter > div { height: 100%; background: var(--ok); border-radius: 99px; }
+.row { display:flex; align-items:center; gap: 10px; flex-wrap: wrap; }
+.row.between { justify-content: space-between; }
+.empty { text-align:center; padding: 40px 16px; }
+.form-grid { display:grid; grid-template-columns: 2fr 1fr 1fr; gap: 0 12px; }
+@media (max-width: 700px) { .form-grid { grid-template-columns: 1fr; } }
+.job { border-top: 1px solid var(--line); padding: 10px 0; }
+.job pre { margin: 6px 0 0; max-height: 120px; overflow: auto; font-size: .78rem; background: var(--bg);
+           border-radius: 8px; padding: 8px; white-space: pre-wrap; }
+.badge { display:inline-block; font-size:.75rem; font-weight:600; border-radius: 999px; padding: 1px 9px; color:#fff; background: var(--muted); }
+.badge.done { background: var(--ok); } .badge.failed { background: var(--warn); } .badge.running { background: var(--accent); }
+/* lesson view */
+.lesson-bar { max-width: 1100px; margin: 0 auto; padding: 8px 16px; display:flex; align-items:center; gap: 12px; flex-wrap: wrap; }
+.lesson-bar .title { font-weight: 700; margin-right: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%; }
+.timer { font-variant-numeric: tabular-nums; font-weight: 700; }
+iframe.report { width: 100%; border: 0; display: block; height: calc(100vh - 110px); }
+/* records */
+.stats { display:grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+@media (max-width: 700px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+.stat .n { font-size: 1.7rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+.stat .l { color: var(--muted); font-size: .85rem; }
+.heat { display:grid; grid-auto-flow: column; grid-template-rows: repeat(7, 13px); grid-auto-columns: 13px; gap: 3px; overflow-x: auto; padding-bottom: 4px; }
+.heat div { width: 13px; height: 13px; border-radius: 3px; background: var(--heat0); }
+.heat .l1 { background: var(--heat1); } .heat .l2 { background: var(--heat2); } .heat .l3 { background: var(--heat3); } .heat .l4 { background: var(--heat4); }
+.heat .future { visibility: hidden; }
+.legend { display:flex; gap: 3px; align-items:center; font-size: .75rem; color: var(--muted); }
+.legend span { width: 11px; height: 11px; border-radius: 3px; display:inline-block; }
+table { width: 100%; min-width: 560px; border-collapse: collapse; font-size: .92rem; }
+td b { white-space: nowrap; }
+th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: .8rem; color: var(--muted); font-weight: 600; }
+td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.table-wrap { overflow-x: auto; }
+dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--card); color: var(--fg); padding: 18px 20px; width: min(460px, calc(100vw - 32px)); }
+dialog::backdrop { background: rgba(0,0,0,.35); }
+.figpick { display:flex; flex-wrap: wrap; gap: 6px; }
+.figpick label { display:flex; align-items:center; gap: 6px; border:1px solid var(--line); border-radius: 8px; padding: 4px 8px; font-size: .88rem; cursor:pointer; }
+.figpick input { width: auto; }
+.toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--fg); color: var(--bg);
+         padding: 8px 14px; border-radius: 10px; font-size: .9rem; opacity: 0; transition: opacity .2s; pointer-events: none; }
+.toast.show { opacity: 1; }
+.error { color: var(--warn); font-size: .88rem; margin-top: 8px; }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="#/">SequenceGuider</a>
+    <nav class="main"><a href="#/" data-nav="library">배우기</a><a href="#/records" data-nav="records">기록</a></nav>
+  </div>
+  <div id="lesson-bar"></div>
+</header>
+<div id="view"></div>
+
+<dialog id="log-dialog">
+  <form method="dialog" id="log-form">
+    <h2 style="margin-top:0">연습 기록 남기기</h2>
+    <div class="row">
+      <div style="flex:1"><label class="field" for="log-day">날짜</label><input type="date" id="log-day" required></div>
+      <div style="flex:1"><label class="field" for="log-min">연습 시간 (분)</label><input type="number" id="log-min" min="1" max="1440" required></div>
+    </div>
+    <label class="field">연습한 피구라</label>
+    <div class="figpick" id="log-figs"></div>
+    <label class="field" for="log-note">메모</label>
+    <textarea id="log-note" placeholder="잘된 점, 막힌 점, 다음에 볼 것"></textarea>
+    <div class="error" id="log-error"></div>
+    <div class="row" style="justify-content:flex-end; margin-top: 14px">
+      <button type="button" id="log-cancel">취소</button>
+      <button class="primary" id="log-save">저장</button>
+    </div>
+  </form>
+</dialog>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const view = $('#view'), lessonBar = $('#lesson-bar');
+const state = { lessons: [], checks: {}, sessions: [], jobs: [] };
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+  set(k, v) { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} },
+};
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts,
+                                  body: opts.body ? JSON.stringify(opts.body) : undefined });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 1800); }
+async function load() {
+  [state.lessons, state.checks, state.sessions] = await Promise.all([api('/api/lessons'), api('/api/checks'), api('/api/sessions')]);
+}
+
+const today = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 10); };
+const fmtDay = s => { const [y, m, d] = s.split('-'); return `${+m}월 ${+d}일`; };
+const fmtT = t => { t = Math.max(0, t || 0); return `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`; };
+const label = f => f.name_ko + (f.count > 1 ? ` ×${f.count}` : '');
+
+function lessonItems(lesson) {
+  const ids = new Set();
+  lesson.figures.forEach(f => f.checklist.forEach(i => ids.add(i.id)));
+  return [...ids];
+}
+function progress(lesson) {
+  const ids = lessonItems(lesson);
+  return { done: ids.filter(id => id in state.checks).length, total: ids.length };
+}
+function lastPracticed(lessonId) {
+  const s = state.sessions.find(s => s.lesson === lessonId);
+  return s ? s.day : null;
+}
+function figureNames() {
+  const names = {};
+  state.lessons.forEach(l => l.figures.forEach(f => { names[f.figure] = f.name_ko; }));
+  return names;
+}
+
+// the report page inside the iframe calls these (see report.py) so its checklist is kept in the records
+window.SG = {
+  getChecks: async () => state.checks,
+  async setCheck(id, checked) {
+    try {
+      state.checks = await api('/api/checks', { method: 'PUT', body: { item_id: id, checked, lesson: currentLesson?.id } });
+      renderLessonBar();
+    } catch (e) { toast('저장하지 못했어요: ' + e.message); }
+  },
+};
+
+// ---------------------------------------------------------------- library
+async function renderLibrary() {
+  lessonBar.innerHTML = '';
+  const lessons = state.lessons;
+  const cards = lessons.map(l => {
+    const p = progress(l), last = lastPracticed(l.id);
+    const pct = p.total ? Math.round(100 * p.done / p.total) : 0;
+    return `<a class="panel lesson" href="#/lesson/${encodeURIComponent(l.id)}">
+      <h3>${esc(l.title)}</h3>
+      <div class="chips">${l.figures.map(f => `<span class="chip">${esc(label(f))}</span>`).join('')}</div>
+      <div><div class="row between small"><span>연습 체크리스트 ${p.done}/${p.total}</span><span class="muted">${pct}%</span></div>
+      <div class="meter"><div style="width:${pct}%"></div></div></div>
+      <div class="small muted">${last ? `마지막 연습 ${fmtDay(last)}` : '아직 연습 기록 없음'}</div>
+    </a>`;
+  }).join('');
+  view.innerHTML = `<main>
+    <div class="row between"><h1>내 레슨</h1><button class="primary" id="new-btn">＋ 새 영상 분석</button></div>
+    <section class="panel" id="new-panel" hidden>
+      <form id="new-form">
+        <div class="form-grid">
+          <div><label class="field" for="nf-source">유튜브 링크 또는 영상 파일 경로</label>
+            <input id="nf-source" placeholder="https://youtu.be/... 또는 C:\\videos\\practice.mp4" required></div>
+          <div><label class="field" for="nf-role">관점</label>
+            <select id="nf-role"><option value="all">리더·팔로워 공통</option><option value="leader">리더</option><option value="follower">팔로워</option></select></div>
+          <div><label class="field" for="nf-view">촬영 방향</label>
+            <select id="nf-view"><option value="side">측면 (권장)</option><option value="front">정면</option></select></div>
+        </div>
+        <label class="field" for="nf-seq">시퀀스 순서 <span class="muted small">(유튜브는 비워 두면 챕터·설명란에서 읽어요)</span></label>
+        <input id="nf-seq" placeholder="살리다, 오초 아뜨라스 x3, 푸에라 데 에헤">
+        <p class="small muted">본인 영상이나 허락받은 영상만, 개인 학습용으로 사용하세요. 분석은 몇 분 걸릴 수 있어요.</p>
+        <div class="error" id="nf-error"></div>
+        <div class="row" style="justify-content:flex-end"><button class="primary">분석 시작</button></div>
+      </form>
+      <div id="jobs"></div>
+    </section>
+    ${lessons.length ? `<div class="grid" style="margin-top:16px">${cards}</div>` :
+      `<div class="panel empty" style="margin-top:16px"><p><b>아직 분석한 영상이 없어요.</b></p>
+       <p class="muted">위의 <b>새 영상 분석</b>에 유튜브 링크를 넣거나, 이 폴더에서 <code>sequenceguider analyze</code>를 실행하면 여기에 나타납니다.</p></div>`}
+  </main>`;
+  const panel = $('#new-panel');
+  $('#new-btn').onclick = () => { panel.hidden = !panel.hidden; if (!panel.hidden) $('#nf-source').focus(); };
+  $('#new-form').onsubmit = async e => {
+    e.preventDefault();
+    $('#nf-error').textContent = '';
+    try {
+      await api('/api/jobs', { method: 'POST', body: { source: $('#nf-source').value, sequence: $('#nf-seq').value,
+                                                         role: $('#nf-role').value, view: $('#nf-view').value } });
+      $('#nf-source').value = ''; $('#nf-seq').value = '';
+      pollJobs();
+    } catch (err) { $('#nf-error').textContent = err.message; }
+  };
+  await pollJobs(true);
+  if (state.jobs.length) panel.hidden = false;
+}
+
+let jobTimer = null;
+async function pollJobs(once) {
+  clearTimeout(jobTimer);
+  if (!$('#jobs')) return;
+  const before = state.jobs.filter(j => j.status === 'running').length;
+  state.jobs = await api('/api/jobs');
+  const running = state.jobs.filter(j => j.status === 'running').length;
+  $('#jobs').innerHTML = state.jobs.map(j => `<div class="job">
+    <div class="row"><span class="badge ${j.status}">${{running: '분석 중', done: '완료', failed: '실패'}[j.status]}</span>
+      <span class="small" style="word-break:break-all">${esc(j.source)}</span>
+      ${j.lesson ? `<a class="small" href="#/lesson/${encodeURIComponent(j.lesson)}">열기 →</a>` : ''}</div>
+    <pre>${esc(j.log.split('\n').slice(-6).join('\n') || '시작하는 중...')}</pre></div>`).join('');
+  if (before && running < before) { await load(); if (location.hash === '' || location.hash === '#/') return renderLibrary(); }
+  if (running) jobTimer = setTimeout(pollJobs, 2000);
+}
+
+// ---------------------------------------------------------------- lesson
+let currentLesson = null;
+function timerStart() { const v = store.get('sg.timer.' + currentLesson?.id); return v ? +v : null; }
+function renderLessonBar() {
+  if (!currentLesson) { lessonBar.innerHTML = ''; return; }
+  const p = progress(currentLesson), started = timerStart();
+  lessonBar.innerHTML = `<div class="lesson-bar">
+    <a href="#/" class="link small muted" style="text-decoration:none">← 레슨 목록</a>
+    <span class="title">${esc(currentLesson.title)}</span>
+    <span class="small muted">체크 ${p.done}/${p.total}</span>
+    ${started ? `<span class="timer" id="timer"></span><button class="primary" id="timer-stop">끝내고 기록</button>`
+              : `<button id="timer-start">연습 시작</button><button class="primary" id="log-open">기록 남기기</button>`}
+  </div>`;
+  if (started) {
+    const tick = () => { const el = $('#timer'); if (el) el.textContent = fmtT((Date.now() - started) / 1000); };
+    tick(); clearInterval(renderLessonBar.iv); renderLessonBar.iv = setInterval(tick, 1000);
+    $('#timer-stop').onclick = () => openLog(Math.max(1, Math.round((Date.now() - started) / 60000)), true);
+  } else {
+    clearInterval(renderLessonBar.iv);
+    $('#timer-start').onclick = () => { store.set('sg.timer.' + currentLesson.id, String(Date.now())); renderLessonBar(); };
+    $('#log-open').onclick = () => openLog(30, false);
+  }
+}
+function renderLesson(id) {
+  currentLesson = state.lessons.find(l => l.id === id);
+  if (!currentLesson) { view.innerHTML = `<main><div class="panel empty">레슨을 찾을 수 없어요. <a href="#/">목록으로</a></div></main>`; return; }
+  renderLessonBar();
+  view.innerHTML = `<iframe class="report" src="/lessons/${encodeURIComponent(id)}/index.html" title="${esc(currentLesson.title)}"></iframe>`;
+}
+
+let logFromTimer = false;
+function openLog(minutes, fromTimer) {
+  logFromTimer = fromTimer;
+  $('#log-day').value = today();
+  $('#log-min').value = minutes;
+  $('#log-note').value = '';
+  $('#log-error').textContent = '';
+  const seen = new Set();
+  $('#log-figs').innerHTML = currentLesson.figures.filter(f => !seen.has(f.figure) && seen.add(f.figure))
+    .map(f => `<label><input type="checkbox" value="${esc(f.figure)}" checked>${esc(f.name_ko)}</label>`).join('');
+  $('#log-dialog').showModal();
+}
+$('#log-cancel').onclick = () => $('#log-dialog').close();
+$('#log-form').onsubmit = async e => {
+  e.preventDefault();
+  try {
+    await api('/api/sessions', { method: 'POST', body: {
+      lesson: currentLesson.id, day: $('#log-day').value, minutes: +$('#log-min').value, note: $('#log-note').value,
+      figures: [...$('#log-figs').querySelectorAll('input:checked')].map(i => i.value) } });
+    if (logFromTimer) store.set('sg.timer.' + currentLesson.id, null);
+    $('#log-dialog').close();
+    state.sessions = await api('/api/sessions');
+    renderLessonBar();
+    toast('연습 기록을 저장했어요');
+  } catch (err) { $('#log-error').textContent = err.message; }
+};
+
+// ---------------------------------------------------------------- records
+function streak(days) {
+  const set = new Set(days);
+  let n = 0; const d = new Date();
+  if (!set.has(today())) d.setDate(d.getDate() - 1);  // today not practised yet doesn't break the streak
+  for (;;) {
+    const s = new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
+    if (!set.has(s)) return n;
+    n++; d.setDate(d.getDate() - 1);
+  }
+}
+function heatmap(minutesByDay) {
+  const cells = [], weeks = 16, end = new Date(), start = new Date();
+  start.setDate(end.getDate() - end.getDay() - 7 * (weeks - 1));  // a Sunday, `weeks` columns back
+  for (let i = 0; i < weeks * 7; i++) {
+    const d = new Date(start); d.setDate(start.getDate() + i);
+    const key = new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
+    const m = minutesByDay[key] || 0;
+    const lvl = m === 0 ? 0 : m < 15 ? 1 : m < 30 ? 2 : m < 60 ? 3 : 4;
+    cells.push(`<div class="${d > end ? 'future' : 'l' + lvl}" title="${fmtDay(key)} · ${m}분"></div>`);
+  }
+  return cells.join('');
+}
+function renderRecords() {
+  lessonBar.innerHTML = ''; currentLesson = null;
+  const S = state.sessions, names = figureNames();
+  const byDay = {}; S.forEach(s => { byDay[s.day] = (byDay[s.day] || 0) + s.minutes; });
+  const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 6);
+  const weekKey = new Date(weekAgo.getTime() - weekAgo.getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
+  const weekMin = S.filter(s => s.day >= weekKey).reduce((a, s) => a + s.minutes, 0);
+  const allIds = new Set(); state.lessons.forEach(l => lessonItems(l).forEach(id => allIds.add(id)));
+  const doneIds = [...allIds].filter(id => id in state.checks).length;
+
+  // per figure, across every lesson: checklist ticks and practice sessions
+  const figs = {};
+  state.lessons.forEach(l => l.figures.forEach(f => {
+    const e = figs[f.figure] ||= { name: f.name_ko, ids: new Set(), sessions: 0, minutes: 0, last: null };
+    f.checklist.forEach(i => e.ids.add(i.id));
+  }));
+  S.forEach(s => s.figures.forEach(k => {
+    const e = figs[k] ||= { name: names[k] || k, ids: new Set(), sessions: 0, minutes: 0, last: null };
+    e.sessions++; e.minutes += s.minutes; if (!e.last || s.day > e.last) e.last = s.day;
+  }));
+  const figRows = Object.values(figs).sort((a, b) => (b.last || '').localeCompare(a.last || '') || b.sessions - a.sessions)
+    .map(e => {
+      const ids = [...e.ids], done = ids.filter(id => id in state.checks).length, pct = ids.length ? Math.round(100 * done / ids.length) : 0;
+      return `<tr><td><b>${esc(e.name)}</b></td>
+        <td style="min-width:140px"><div class="row small"><span class="num">${done}/${ids.length}</span></div><div class="meter"><div style="width:${pct}%"></div></div></td>
+        <td class="num">${e.sessions}회 · ${e.minutes}분</td><td class="num">${e.last ? fmtDay(e.last) : '—'}</td></tr>`;
+    }).join('');
+  const titles = Object.fromEntries(state.lessons.map(l => [l.id, l.title]));
+  const sessionRows = S.map(s => `<tr>
+    <td class="num">${fmtDay(s.day)}</td><td class="num">${s.minutes}분</td>
+    <td>${s.lesson && titles[s.lesson] ? `<a href="#/lesson/${encodeURIComponent(s.lesson)}">${esc(titles[s.lesson])}</a>` : '<span class="muted">—</span>'}
+      <div class="chips" style="margin-top:4px">${s.figures.map(k => `<span class="chip">${esc(names[k] || k)}</span>`).join('')}</div></td>
+    <td>${esc(s.note) || '<span class="muted">—</span>'}</td>
+    <td><button class="link" data-del="${s.id}" title="삭제">삭제</button></td></tr>`).join('');
+
+  view.innerHTML = `<main>
+    <div class="row between"><h1>연습 기록</h1><a href="/api/export" download="sequenceguider-records.json" class="small muted">기록 내보내기 (JSON)</a></div>
+    <div class="stats">
+      <div class="panel stat"><div class="n">${weekMin}<span class="small">분</span></div><div class="l">최근 7일 연습</div></div>
+      <div class="panel stat"><div class="n">${streak(Object.keys(byDay))}<span class="small">일</span></div><div class="l">연속 연습</div></div>
+      <div class="panel stat"><div class="n">${S.length}<span class="small">회</span></div><div class="l">전체 연습 기록</div></div>
+      <div class="panel stat"><div class="n">${doneIds}<span class="small">/${allIds.size}</span></div><div class="l">체크한 연습 항목</div></div>
+    </div>
+    <h2>연습한 날</h2>
+    <div class="panel"><div class="heat">${heatmap(byDay)}</div>
+      <div class="legend" style="margin-top:8px">적게 <span style="background:var(--heat0)"></span><span style="background:var(--heat1)"></span><span style="background:var(--heat2)"></span><span style="background:var(--heat3)"></span><span style="background:var(--heat4)"></span> 많이 · 칸 하나가 하루</div></div>
+    <h2>피구라별 진도</h2>
+    ${figRows ? `<div class="panel table-wrap"><table><thead><tr><th>피구라</th><th>체크리스트</th><th>연습</th><th>마지막 연습</th></tr></thead><tbody>${figRows}</tbody></table></div>`
+              : `<div class="panel empty muted">레슨을 분석하면 피구라별 진도가 여기에 쌓여요.</div>`}
+    <h2>연습 일지</h2>
+    ${sessionRows ? `<div class="panel table-wrap"><table><thead><tr><th>날짜</th><th>시간</th><th>레슨 · 피구라</th><th>메모</th><th></th></tr></thead><tbody>${sessionRows}</tbody></table></div>`
+                  : `<div class="panel empty muted">레슨 화면에서 <b>연습 시작</b>이나 <b>기록 남기기</b>를 누르면 여기에 기록돼요.</div>`}
+  </main>`;
+  const heat = $('.heat'); heat.scrollLeft = heat.scrollWidth;  // newest weeks in view on a phone
+  view.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+    if (!confirm('이 연습 기록을 지울까요?')) return;
+    await api('/api/sessions/' + b.dataset.del, { method: 'DELETE' });
+    state.sessions = await api('/api/sessions');
+    renderRecords();
+  });
+}
+
+// ---------------------------------------------------------------- router
+async function route() {
+  const h = location.hash || '#/';
+  document.querySelectorAll('nav.main a').forEach(a =>
+    a.classList.toggle('active', a.dataset.nav === (h.startsWith('#/records') ? 'records' : 'library')));
+  try { await load(); } catch (e) { view.innerHTML = `<main><div class="panel error">서버에 연결하지 못했어요: ${esc(e.message)}</div></main>`; return; }
+  if (h.startsWith('#/lesson/')) return renderLesson(decodeURIComponent(h.slice('#/lesson/'.length)));
+  currentLesson = null;
+  if (h.startsWith('#/records')) return renderRecords();
+  return renderLibrary();
+}
+window.addEventListener('hashchange', route);
+route();
+</script>
+</body>
+</html>
