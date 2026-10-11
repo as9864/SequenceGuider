@@ -18,10 +18,16 @@ Written into the lesson folder (<name>_sequenceguider/, same as `analyze`):
     notes.json                 everything the web app's lesson view shows
     notes.md                   the same notes as plain text
 
+Audio recordings (m4a, mp3, wav ...) work the same as videos. Given who speaks
+(e.g. two teachers in English and an interpreter in Korean), speakers.py first
+finds who talks when; each stretch is transcribed in its own language and every
+line is labelled with its speaker.
+
 Steps 2–3 need an Anthropic API key (ANTHROPIC_API_KEY). Without one you still
 get the transcript and subtitles; run again with a key to add the rest.
 """
 
+import hashlib
 import json
 import re
 from collections.abc import Callable
@@ -29,7 +35,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
+
 from sequenceguider.figures import FigureLibrary
+from sequenceguider.speakers import Speaker, Turn, diarize, is_korean, language_runs, speaker_at
 
 MODEL = "claude-opus-5-5"
 SAMPLE_RATE = 16000  # what faster-whisper decodes to
@@ -58,6 +67,7 @@ class Segment:
     end: float
     text: str
     ko: str = ""
+    speaker: str = ""  # a Speaker.name, when the lesson was given more than one (--speakers)
 
 
 def fmt_ts(t: float) -> str:
@@ -78,14 +88,37 @@ def tango_vocabulary(library: FigureLibrary) -> str:
 
 # ---------------------------------------------------------------- 1. transcribe
 
+def _cuda_libraries() -> None:
+    """Let CTranslate2 find cuBLAS/cuDNN installed as pip wheels (`uv sync --extra gpu`)."""
+    import os
+    import sys
+
+    try:
+        import nvidia
+    except ImportError:
+        return
+    for root in nvidia.__path__:
+        for sub in Path(root).glob("*/bin" if sys.platform == "win32" else "*/lib"):
+            os.environ["PATH"] = str(sub) + os.pathsep + os.environ.get("PATH", "")
+            if sys.platform == "win32":
+                os.add_dll_directory(str(sub))
+
+
 def _whisper(model: str):
     from faster_whisper import WhisperModel
 
+    _cuda_libraries()
     try:
         import ctranslate2
 
         if ctranslate2.get_cuda_device_count() > 0:
-            return WhisperModel(model, device="cuda", compute_type="float16")
+            # float16 needs a recent GPU; older ones (GTX 10xx) still run int8 on CUDA
+            types = ctranslate2.get_supported_compute_types("cuda")
+            compute = next(t for t in ("float16", "int8_float16", "int8_float32", "float32") if t in types)
+            m = WhisperModel(model, device="cuda", compute_type=compute)
+            # the CUDA libraries load on first use: try them now, not 10 minutes into a lesson
+            m.detect_language(np.zeros(SAMPLE_RATE, dtype=np.float32))
+            return m
     except Exception:  # no CUDA build / driver: CPU it is
         pass
     return WhisperModel(model, device="cpu", compute_type="int8")
@@ -93,21 +126,28 @@ def _whisper(model: str):
 
 def transcribe(media: Path, cache_dir: Path, *, model: str = "turbo", language: str | None = None,
                vocabulary: str = "", progress: Callable[[float, float], None] | None = None,
-               whisper=None) -> tuple[list[Segment], str, float]:
+               whisper=None, audio=None, turns: list[Turn] | None = None) -> tuple[list[Segment], str, float]:
     """Speech → segments with absolute times. Returns (segments, language, duration_s).
 
-    `whisper` is a ready WhisperModel-like object (tests pass a fake).
+    `turns` (from find_turns): who talks when, in which language. Each stretch is then
+    transcribed in its own language (an interpreter's Korean as Korean, not as English),
+    every line gets its speaker, and the language returned is the one most talk was in.
+    `whisper` is a ready WhisperModel-like object (tests pass a fake), `audio` the
+    decoded recording if the caller already has it.
     """
-    try:
-        from faster_whisper import decode_audio
-    except ImportError as e:
-        raise NotesError("음성 인식 패키지가 없습니다. `uv sync --extra notes`로 설치하세요.") from e
-
-    audio = decode_audio(str(media), sampling_rate=SAMPLE_RATE)
+    if audio is None:
+        try:
+            audio = load_audio(media)
+        except ImportError as e:
+            raise NotesError("음성 인식 패키지가 없습니다. `uv sync --extra notes`로 설치하세요.") from e
     duration = len(audio) / SAMPLE_RATE
     if duration < 1:
         raise NotesError("영상에서 소리를 찾지 못했습니다.")
-    cache = cache_dir / f"whisper-{model}-{language or 'auto'}"
+    runs = language_runs(turns) if turns else None
+    key = language or "auto"
+    if runs:
+        key = "turns-" + hashlib.sha1(json.dumps([asdict(r) for r in runs]).encode()).hexdigest()[:10]
+    cache = cache_dir / f"whisper-{model}-{key}"
     cache.mkdir(parents=True, exist_ok=True)
     n_chunks = int(-(-duration // CHUNK_S))
     segments: list[Segment] = []
@@ -120,24 +160,37 @@ def transcribe(media: Path, cache_dir: Path, *, model: str = "turbo", language: 
         else:
             if whisper is None:
                 whisper = _whisper(model)
-            chunk = audio[int(offset * SAMPLE_RATE): int(min(duration, offset + CHUNK_S) * SAMPLE_RATE)]
-            # the last line said is the best hint for how the next chunk starts
-            prompt = " ".join(filter(None, [vocabulary, segments[-1].text if segments else ""]))
-            found, info = whisper.transcribe(
-                chunk, language=lang, initial_prompt=prompt or None, vad_filter=True, beam_size=5,
-                # off: on long audio it lets one misheard line repeat for minutes
-                condition_on_previous_text=False,
-            )
+            if runs is None:
+                chunk = audio[int(offset * SAMPLE_RATE): int(min(duration, offset + CHUNK_S) * SAMPLE_RATE)]
+                # the last line said is the best hint for how the next chunk starts
+                prompt = " ".join(filter(None, [vocabulary, segments[-1].text if segments else ""]))
+                jobs = [(lang, chunk, {"vad_filter": True, "initial_prompt": prompt or None})]
+            else:
+                # the stretches that start in this chunk, one pass per language over just those clips
+                mine = [r for r in runs if offset <= r.start < offset + CHUNK_S]
+                chunk = audio[int(offset * SAMPLE_RATE): int(max([r.end for r in mine], default=offset) * SAMPLE_RATE)]
+                jobs = [(code, chunk, {"clip_timestamps": [round(x - offset, 2) for r in mine if r.language == code
+                                                           for x in (r.start, r.end)],
+                                       # the (Spanish) tango vocabulary only helps the foreign-language stretches
+                                       "initial_prompt": vocabulary if vocabulary and code != "ko" else None})
+                        for code in sorted({r.language for r in mine})]
             data = {"language": None, "segments": []}
-            for s in found:
-                text = s.text.strip()
-                if text:
-                    data["segments"].append({"start": round(offset + s.start, 2), "end": round(offset + s.end, 2),
-                                             "text": text})
-                if progress:
-                    progress(offset + s.end, duration)
-            if data["segments"]:
-                data["language"] = info.language
+            for code, chunk, kw in jobs:
+                found, info = whisper.transcribe(
+                    chunk, language=code, beam_size=5,
+                    # off: on long audio it lets one misheard line repeat for minutes
+                    condition_on_previous_text=False, **kw,
+                )
+                for s in found:
+                    text = s.text.strip()
+                    if text and not _made_up(text, vocabulary, s):
+                        data["segments"].append({"start": round(offset + s.start, 2),
+                                                 "end": round(offset + s.end, 2), "text": text})
+                    if progress:
+                        progress(offset + s.end, duration)
+                if data["segments"] and runs is None:
+                    data["language"] = info.language
+            data["segments"].sort(key=lambda s: s["start"])
             part.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
         # music-only chunks guess languages at random: fix it from the first chunk with speech
         if lang is None and data.get("language"):
@@ -145,7 +198,36 @@ def transcribe(media: Path, cache_dir: Path, *, model: str = "turbo", language: 
         segments += [Segment(**s) for s in data["segments"]]
         if progress:
             progress(min(duration, offset + CHUNK_S), duration)
+    if turns:
+        for s in segments:
+            s.speaker = speaker_at(turns, s.start, s.end)
+        talk: dict[str, float] = {}
+        for t in turns:
+            talk[t.language] = talk.get(t.language, 0.0) + t.end - t.start
+        lang = language or max(talk, key=talk.get)
     return _drop_repeats(segments), lang or "unknown", duration
+
+
+# what Whisper writes over music and room noise, learnt from subtitled videos ("thanks for watching")
+_FILLER = re.compile(r"(다음 영상에서 만나|시청해 ?주셔서 감사|구독과 좋아요|좋아요와 구독|^아멘[.!]?$|MBC 뉴스|"
+                     r"^수고하(셨|십시오)|thanks? for watching|subtitles by|^\(?음악\)?$)", re.IGNORECASE)
+
+
+def _made_up(text: str, prompt: str, seg) -> bool:
+    """A line the speech model invented: the vocabulary hint read back, a stock phrase, or near-silence."""
+    norm = lambda t: re.sub(r"\W+", " ", t).strip().lower()  # noqa: E731
+    if prompt and len(norm(text)) >= 10 and norm(text) in norm(prompt):
+        return True
+    if _FILLER.search(text.strip()):
+        return True
+    return getattr(seg, "no_speech_prob", 0.0) > 0.6 and getattr(seg, "avg_logprob", 0.0) < -1.0
+
+
+def load_audio(media: Path):
+    from faster_whisper import decode_audio
+
+    return decode_audio(str(media), sampling_rate=SAMPLE_RATE)
+
 
 
 def _drop_repeats(segments: list[Segment], limit: int = 3) -> list[Segment]:
@@ -157,6 +239,41 @@ def _drop_repeats(segments: list[Segment], limit: int = 3) -> list[Segment]:
         if run < limit:
             out.append(s)
     return out
+
+
+# ---------------------------------------------------------------- speakers
+
+def find_turns(audio, speakers: list[Speaker], cache_dir: Path, *, whisper,
+               progress: Callable[[float, float], None] | None = None,
+               log: Callable[[str], None] | None = None) -> list[Turn]:
+    """Who talks when (speakers.diarize), cached per list of speakers."""
+    key = hashlib.sha1(json.dumps([asdict(s) for s in speakers], ensure_ascii=False).encode()).hexdigest()[:10]
+    path = cache_dir / f"turns-{key}.json"
+    if path.exists():
+        return [Turn(**t) for t in json.loads(path.read_text(encoding="utf-8"))]
+
+    def detect_language(samples) -> dict[str, float]:
+        return dict(whisper.detect_language(samples)[2])
+
+    turns = diarize(audio, speakers, detect_language, progress=progress, log=log)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps([asdict(t) for t in turns], ensure_ascii=False), encoding="utf-8")
+    return turns
+
+
+def speakers_note(speakers: list[Speaker]) -> str:
+    """What Claude should know about the voices, for the translate and key-point prompts."""
+    if not speakers:
+        return ""
+    gender = {"male": "남성", "female": "여성"}
+    who = ", ".join(p.name + (f"({'/'.join(filter(None, [gender.get(p.gender), LANGUAGE_NAMES.get(p.language, p.language)]))})"
+                              if p.gender or p.language else "") for p in speakers)
+    text = f"\n- 화자: {who}. 줄 앞의 (이름)은 목소리 높이와 언어로 자동 추정한 것이라 가끔 틀립니다. 문맥상 다른 사람이면 그렇게 읽으세요."
+    if any(p.language == "ko" for p in speakers) and any(p.language not in ("", "ko") for p in speakers):
+        interp = ", ".join(p.name for p in speakers if p.language == "ko")
+        text += (f"\n- 한국어로 말하는 {interp}은(는) 통역입니다. 통역의 한국어는 바로 앞 외국어 설명을 옮긴 것이니 같은 내용으로 보고, "
+                 "통역이 빠뜨리거나 다르게 옮긴 부분은 원문을 기준으로 삼으세요.")
+    return text
 
 
 # ---------------------------------------------------------------- Claude
@@ -207,30 +324,33 @@ TRANSLATE_SCHEMA = {
 }
 
 
-def _translate_system(language: str, library: FigureLibrary) -> str:
+def _translate_system(language: str, library: FigureLibrary, speakers: str = "") -> str:
     src = LANGUAGE_NAMES.get(language, language)
+    who = (speakers + "\n- who는 그 줄을 말한 사람입니다. 말투를 그 사람에 맞추되 이름을 번역에 넣지는 마세요.") if speakers else ""
     return f"""탱고 개인 레슨을 음성 인식으로 받아 적은 {src} 자막을 한국어로 옮깁니다. 한국 탱고 학생이 영상과 함께 읽습니다.
 
 - 줄마다 따로 옮기고 번호(i)를 그대로 돌려주세요. 줄을 합치거나 빼지 마세요.
 - 말하는 그대로의 자연스러운 구어체로. 강사가 학생에게 하는 말이니 존댓말("~하세요")로 옮기세요.
 - 탱고 용어는 한국 탱고 커뮤니티에서 쓰는 표기로: {_term_hint(library)}. 그 밖의 용어도 소리 나는 대로 한글로 쓰고 필요하면 괄호에 원어를 붙이세요 (예: 에헤(eje)).
-- 음성 인식 오류로 보이는 단어는 앞뒤 문맥으로 바로잡아 옮기세요. 음악 가사나 의미 없는 소리는 "(음악)"처럼 짧게 표시하세요."""
+- 음성 인식 오류로 보이는 단어는 앞뒤 문맥으로 바로잡아 옮기세요. 음악 가사나 의미 없는 소리는 "(음악)"처럼 짧게 표시하세요.{who}"""
 
 
 def translate(segments: list[Segment], language: str, library: FigureLibrary, client, *,
               save: Callable[[], None] | None = None, batch: int = 80, workers: int = 4, model: str = MODEL,
-              progress: Callable[[int, int], None] | None = None) -> None:
-    """Fill in segment.ko in place. Lines that already have it are skipped (resume)."""
-    todo = [i for i, s in enumerate(segments) if not s.ko]
+              progress: Callable[[int, int], None] | None = None, speakers: list[Speaker] = ()) -> None:
+    """Fill in segment.ko in place. Lines that already have it are skipped (resume), and
+    so are lines already in Korean (an interpreter's); `korean_lines` fills those."""
+    todo = [i for i, s in enumerate(segments) if not s.ko and not is_korean(s.text)]
     if not todo:
         return
-    system = _translate_system(language, library)
+    system = _translate_system(language, library, speakers_note(list(speakers)))
     batches = [todo[k:k + batch] for k in range(0, len(todo), batch)]
 
     def run(ids: list[int]) -> tuple[list[int], dict]:
         # a few lines either side so a sentence split across the batch edge still reads right
         before = [segments[j].text for j in range(max(0, ids[0] - 3), ids[0])]
-        lines = "\n".join(json.dumps({"i": i, "text": segments[i].text}, ensure_ascii=False) for i in ids)
+        lines = "\n".join(json.dumps({"i": i, "text": segments[i].text} | ({"who": segments[i].speaker} if segments[i].speaker else {}),
+                                     ensure_ascii=False) for i in ids)
         prompt = (("앞 문맥 (옮기지 마세요): " + " / ".join(before) + "\n\n") if before else "") + "옮길 줄:\n" + lines
         return ids, ask_json(client, system=system, prompt=prompt, schema=TRANSLATE_SCHEMA, effort="low",
                              model=model, max_tokens=16000)
@@ -248,6 +368,14 @@ def translate(segments: list[Segment], language: str, library: FigureLibrary, cl
                 save()
             if progress:
                 progress(done, len(todo))
+
+
+def korean_lines(segments: list[Segment]) -> None:
+    """In a lesson with translated lines, lines already said in Korean are their own subtitle."""
+    if any(s.ko and not is_korean(s.text) for s in segments):
+        for s in segments:
+            if not s.ko and is_korean(s.text):
+                s.ko = s.text
 
 
 # ---------------------------------------------------------------- 3. key points
@@ -282,12 +410,15 @@ def _notes_schema(figure_keys: list[str]) -> dict:
     }
 
 
-def _notes_system(library: FigureLibrary, role: str) -> str:
+def _notes_system(library: FigureLibrary, role: str, speakers: list[Speaker] = ()) -> str:
     who = {"leader": "리더", "follower": "팔로워"}.get(role)
     focus = f"\n- 이 학생은 {who}입니다. {who}에게 해당하는 내용을 우선하되, 상대 역할 설명도 이해에 필요하면 넣으세요." if who else ""
+    focus += speakers_note(list(speakers))
+    if speakers:
+        focus += "\n- point나 detail에서 누가 한 말인지가 중요하면 화자 이름을 밝히세요 (예: 여자 강사가 팔로워에게)."
     return f"""당신은 탱고 강사의 조교입니다. 1~2시간짜리 탱고 개인 레슨의 음성 인식 자막을 읽고, 학생이 다시 영상을 보며 복습할 수 있는 한국어 학습 노트를 만듭니다.
 
-자막은 "[시:분:초 | 초] 내용" 형식이고 기계로 받아 적어 오류가 있습니다. 음악만 나오는 구간의 엉뚱한 문장은 무시하세요.
+자막은 "[시:분:초 | 초] 내용" 또는 "[시:분:초 | 초] (화자) 내용" 형식이고 기계로 받아 적어 오류가 있습니다. 음악만 나오는 구간의 엉뚱한 문장은 무시하세요.
 
 만들 것:
 - title: 이 레슨을 한 줄로 (예: "오초 아뜨라스의 피벗과 축 유지")
@@ -308,15 +439,16 @@ def _notes_system(library: FigureLibrary, role: str) -> str:
 
 
 def _transcript_text(segments: list[Segment]) -> str:
-    return "\n".join(f"[{fmt_ts(s.start)} | {s.start:.0f}] {s.text}" for s in segments)
+    return "\n".join(f"[{fmt_ts(s.start)} | {s.start:.0f}] {f'({s.speaker}) ' if s.speaker else ''}{s.text}"
+                     for s in segments)
 
 
 def key_points(segments: list[Segment], duration: float, library: FigureLibrary, client, *,
-               role: str = "all", model: str = MODEL) -> dict:
+               role: str = "all", model: str = MODEL, speakers: list[Speaker] = ()) -> dict:
     if not segments:
         raise NotesError("받아 적은 말이 없어 핵심을 정리할 수 없습니다.")
     keys = list(library.figures)
-    raw = ask_json(client, system=_notes_system(library, role), schema=_notes_schema(keys), effort="high",
+    raw = ask_json(client, system=_notes_system(library, role, speakers), schema=_notes_schema(keys), effort="high",
                    model=model, max_tokens=64000,
                    prompt=f"레슨 길이 {fmt_ts(duration)}. 자막:\n\n{_transcript_text(segments)}")
     return clean_notes(raw, duration, keys)
@@ -363,24 +495,28 @@ def _srt_time(t: float) -> str:
 def write_srt(segments: list[Segment], path: Path, *, korean: bool = False) -> None:
     blocks = []
     for n, s in enumerate((s for s in segments if not korean or s.ko), 1):
-        blocks.append(f"{n}\n{_srt_time(s.start)} --> {_srt_time(s.end)}\n{s.ko if korean else s.text}\n")
+        who = f"[{s.speaker}] " if s.speaker else ""
+        blocks.append(f"{n}\n{_srt_time(s.start)} --> {_srt_time(s.end)}\n{who}{s.ko if korean else s.text}\n")
     path.write_text("\n".join(blocks), encoding="utf-8")
 
 
-def save_transcript(out: Path, segments: list[Segment], language: str, duration: float, model: str) -> None:
+def save_transcript(out: Path, segments: list[Segment], language: str, duration: float, model: str, *,
+                    speakers: list[Speaker] = ()) -> None:
     data = {"language": language, "duration_s": round(duration, 2), "whisper_model": model,
+            "speakers": [asdict(p) for p in speakers],
             "segments": [asdict(s) for s in segments]}
     tmp = out / "transcript.json.tmp"
     tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     tmp.replace(out / "transcript.json")
 
 
-def load_transcript(out: Path) -> tuple[list[Segment], str, float, str] | None:
+def load_transcript(out: Path) -> tuple[list[Segment], str, float, str, dict] | None:
+    """(segments, language, duration_s, whisper model, the rest of transcript.json)."""
     path = out / "transcript.json"
     if not path.exists():
         return None
     d = json.loads(path.read_text(encoding="utf-8"))
-    return [Segment(**s) for s in d["segments"]], d["language"], d["duration_s"], d.get("whisper_model", "")
+    return [Segment(**s) for s in d.pop("segments")], d["language"], d["duration_s"], d.get("whisper_model", ""), d
 
 
 def practice_ids(lesson_id: str, practice: list[dict]) -> list[dict]:
@@ -394,6 +530,8 @@ def notes_markdown(notes: dict, library: FigureLibrary) -> str:
         lines += [f"영상: {notes['source_url']}", ""]
     if notes.get("summary"):
         lines += [notes["summary"], ""]
+    if notes.get("speakers"):
+        lines += ["화자: " + ", ".join(p["name"] for p in notes["speakers"]) + " (자막의 화자는 목소리로 자동 추정)", ""]
     if notes.get("key_points"):
         lines += ["## 핵심", ""]
         for p in notes["key_points"]:
@@ -417,6 +555,9 @@ def notes_markdown(notes: dict, library: FigureLibrary) -> str:
     if notes.get("glossary"):
         lines += ["## 용어", ""] + [f"- **{g['term']}** — {g['meaning']}" for g in notes["glossary"]] + [""]
     return "\n".join(lines)
+
+
+AUDIO_EXTS = {".m4a", ".mp3", ".wav", ".aac", ".ogg", ".oga", ".opus", ".flac", ".weba"}
 
 
 def video_ref(out: Path, video: Path | None) -> str | None:

@@ -90,6 +90,12 @@ dialog::backdrop { background: rgba(0,0,0,.35); }
 .nv { max-width: 1400px; margin: 0 auto; padding: 14px 16px 40px; display:grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 18px; }
 .nv-player { position: sticky; top: var(--head, 100px); align-self: start; }
 .nv-player video, .nv-player .yt { width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 10px; display:block; }
+.nv-player audio { width: 100%; display:block; }
+.caption { min-height: 4.2em; margin-top: 8px; padding: 10px 12px; border-radius: 10px; background: var(--card); border: 1px solid var(--line); }
+.caption .k { font-size: 1.05rem; font-weight: 600; } .caption .o { color: var(--muted); font-size: .85rem; margin-top: 2px; }
+.who { font-size: .72rem; font-weight: 700; border-radius: 999px; padding: 0 7px; margin-right: 6px; white-space: nowrap;
+       color: hsl(var(--h) 60% 40%); background: hsl(var(--h) 70% 50% / .12); }
+@media (prefers-color-scheme: dark) { .who { color: hsl(var(--h) 70% 72%); } }
 .nv-player .yt iframe { width: 100%; height: 100%; border: 0; border-radius: 10px; }
 .nv-player h1 { margin: 12px 0 4px; }
 .nv-side { min-width: 0; }
@@ -248,13 +254,15 @@ async function renderLibrary() {
           <option value="analyze">동작 분석: 피구라별 구간 · 자세 체크 (시퀀스 연습 영상)</option>
         </select>
         <div class="form-grid">
-          <div><label class="field" for="nf-source">유튜브 링크 또는 영상 파일 경로</label>
-            <input id="nf-source" placeholder="https://youtu.be/... 또는 C:\\videos\\practice.mp4" required></div>
+          <div><label class="field" for="nf-source">유튜브 링크 또는 영상·녹음 파일 경로</label>
+            <input id="nf-source" placeholder="https://youtu.be/... 또는 C:\\videos\\practice.mp4, lesson.m4a" required></div>
           <div><label class="field" for="nf-role">관점</label>
             <select id="nf-role"><option value="all">리더·팔로워 공통</option><option value="leader">리더</option><option value="follower">팔로워</option></select></div>
           <div class="analyze-only"><label class="field" for="nf-view">촬영 방향</label>
             <select id="nf-view"><option value="side">측면 (권장)</option><option value="front">정면</option></select></div>
         </div>
+        <div class="notes-only"><label class="field" for="nf-speakers">화자 <span class="muted small">(여러 명이면. 이름=성별/언어, 쉼표로 구분)</span></label>
+        <input id="nf-speakers" placeholder="남자 강사=남/en, 여자 강사=여/en, 통역=남/ko"></div>
         <div class="analyze-only"><label class="field" for="nf-seq">시퀀스 순서 <span class="muted small">(유튜브는 비워 두면 챕터·설명란에서 읽어요)</span></label>
         <input id="nf-seq" placeholder="살리다, 오초 아뜨라스 x3, 푸에라 데 에헤"></div>
         <p class="small muted" id="nf-hint"></p>
@@ -272,6 +280,7 @@ async function renderLibrary() {
   const kindChanged = () => {
     const notes = $('#nf-kind').value === 'notes';
     view.querySelectorAll('.analyze-only').forEach(el => el.hidden = notes);
+    view.querySelectorAll('.notes-only').forEach(el => el.hidden = !notes);
     $('#nf-hint').textContent = (notes
       ? '말을 받아 적고(내 컴퓨터에서) Claude로 번역·정리합니다. 1시간 영상이면 받아쓰기만 수십 분 걸릴 수 있어요. 번역·정리에는 ANTHROPIC_API_KEY가 필요해요. '
       : '분석은 몇 분 걸릴 수 있어요. ') + '본인 영상이나 허락받은 영상만, 개인 학습용으로 사용하세요.';
@@ -284,7 +293,7 @@ async function renderLibrary() {
     $('#nf-error').textContent = '';
     try {
       await api('/api/jobs', { method: 'POST', body: { kind: $('#nf-kind').value, source: $('#nf-source').value, sequence: $('#nf-seq').value,
-                                                         role: $('#nf-role').value, view: $('#nf-view').value } });
+                                                         role: $('#nf-role').value, view: $('#nf-view').value, speakers: $('#nf-speakers').value } });
       $('#nf-source').value = ''; $('#nf-seq').value = '';
       pollJobs();
     } catch (err) { $('#nf-error').textContent = err.message; }
@@ -381,15 +390,20 @@ async function renderNotes(lesson) {
   let tab = store.get('sg.notesTab') || (kp.length ? 'points' : 'transcript');
   if (!kp.length && tab !== 'transcript') tab = 'transcript';
   const lang = { ko: '한국어', es: '스페인어', en: '영어' }[notes.language] || notes.language || '';
+  const speakers = notes.speakers || [];
+  const whoTag = name => name ? `<span class="who" style="--h:${[210, 340, 140, 30, 270][Math.max(0, speakers.findIndex(p => p.name === name)) % 5]}">${esc(name)}</span>` : '';
 
   view.innerHTML = `<div class="nv">
     <div class="nv-player">
-      ${notes.video ? `<video id="nv-video" controls preload="metadata" playsinline src="${base}/notes-video"></video>`
+      ${notes.video && notes.media === 'audio' ? `<audio id="nv-video" controls preload="metadata" src="${base}/notes-video"></audio>
+          <div class="caption" id="nv-caption"><div class="small muted">재생하면 여기에 자막이 나와요.</div></div>`
+        : notes.video ? `<video id="nv-video" controls preload="metadata" playsinline src="${base}/notes-video"></video>`
         : ytId ? `<div class="yt"><div id="nv-yt"></div></div>`
         : `<div class="notice">영상 파일을 찾지 못했어요. 시간을 눌러도 재생되지 않지만 노트는 볼 수 있어요.</div>`}
       <div class="meta-block">
         <h1>${esc(notes.title || lesson.title)}</h1>
         <div class="small muted">${[lang && lang + ' 레슨', notes.duration_s && fmtHMS(notes.duration_s), hasKo && '한국어 자막', ROLE_KO[notes.role] && ROLE_KO[notes.role] + ' 관점'].filter(Boolean).join(' · ')}</div>
+        ${speakers.length ? `<div class="small" style="margin-top:6px">${speakers.map(p => whoTag(p.name)).join('')}<span class="muted">화자는 목소리로 자동 추정</span></div>` : ''}
         ${notes.summary ? `<p>${esc(notes.summary)}</p>` : ''}
       </div>
     </div>
@@ -450,7 +464,7 @@ async function renderNotes(lesson) {
           ${hasKo ? `<select id="tr-mode"><option value="both">원문+번역</option><option value="ko">번역만</option><option value="orig">원문만</option></select>` : ''}
           <label class="small row" style="gap:4px"><input type="checkbox" id="tr-follow" style="width:auto" ${store.get('sg.trFollow') === '0' ? '' : 'checked'}>따라가기</label></div>
         <div class="tr ${hasKo ? { both: 'both', ko: 'only-ko', orig: 'only-orig' }[mode] : ''}" id="tr">${segs.map((s, i) =>
-          `<div class="line" data-i="${i}" data-t="${s.start}"><span class="tbtn">${fmtHMS(s.start)}</span><span class="o">${esc(s.text)}</span>${s.ko ? `<span class="k">${esc(s.ko)}</span>` : ''}</div>`).join('')}</div>`;
+          `<div class="line" data-i="${i}" data-t="${s.start}"><span class="tbtn">${fmtHMS(s.start)}</span><span class="o">${whoTag(s.speaker)}${esc(s.text)}</span>${s.ko ? `<span class="k">${esc(s.ko)}</span>` : ''}</div>`).join('')}</div>`;
     },
     practice() {
       const P = notes.practice || [], G = notes.glossary || [];
@@ -477,7 +491,7 @@ async function renderNotes(lesson) {
           const mark = t => { if (!term) return esc(t); const lo = t.toLowerCase(); let out = '', a = 0, b;
             while ((b = lo.indexOf(term, a)) !== -1) { out += esc(t.slice(a, b)) + '<mark>' + esc(t.slice(b, b + term.length)) + '</mark>'; a = b + term.length; }
             return out + esc(t.slice(a)); };
-          if (hit) { el.querySelector('.o').innerHTML = mark(s.text); const k = el.querySelector('.k'); if (k) k.innerHTML = mark(s.ko); }
+          if (hit) { el.querySelector('.o').innerHTML = whoTag(s.speaker) + mark(s.text); const k = el.querySelector('.k'); if (k) k.innerHTML = mark(s.ko); }
         });
       };
       const sel = $('#tr-mode');
@@ -497,6 +511,12 @@ async function renderNotes(lesson) {
     const t = player.time();
     let i = -1;
     for (let lo = 0, hi = segs.length - 1; lo <= hi;) { const mid = (lo + hi) >> 1; if (segs[mid].start <= t) { i = mid; lo = mid + 1; } else hi = mid - 1; }
+    const cap = $('#nv-caption'), cur = segs[i];
+    if (cap) {  // audio has no picture to put subtitles on: show the line being said under the player
+      const html = cur && t <= cur.end + 1.5
+        ? `<div class="k">${whoTag(cur.speaker)}${esc(cur.ko || cur.text)}</div>${cur.ko && cur.ko !== cur.text ? `<div class="o">${esc(cur.text)}</div>` : ''}` : '';
+      if (cap.dataset.html !== html && (t > 0 || html)) { cap.innerHTML = html; cap.dataset.html = html; }
+    }
     if (i !== lastLine) {
       pane.querySelector('.line.now')?.classList.remove('now');
       const el = pane.querySelector(`.line[data-i="${i}"]`);

@@ -20,6 +20,11 @@ notes = [
     "faster-whisper>=1.1",
     "anthropic>=1.11",
 ]
+# NVIDIA GPU for the speech model: CUDA 12 cuBLAS + cuDNN 9 (CTranslate2 loads them; ~1GB)
+gpu = [
+    "nvidia-cublas-cu12; sys_platform != 'darwin'",
+    "nvidia-cudnn-cu12>=9,<10; sys_platform != 'darwin'",
+]
 
 [project.scripts]
 sequenceguider = "sequenceguider.cli:app"

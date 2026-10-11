@@ -30,6 +30,11 @@ from sequenceguider.records import Records
 APP_HTML = Path(__file__).parent / "web" / "app.html"
 _RANGE = re.compile(r"bytes=(\d*)-(\d*)$")
 VIDEO_EXTS = {".mp4", ".m4v", ".mov", ".webm", ".mkv", ".ogv"}
+AUDIO_EXTS = {".m4a", ".mp3", ".wav", ".aac", ".ogg", ".oga", ".opus", ".flac", ".weba"}
+# Windows' registry often has no (or an odd) type for these, and <audio> needs a playable one
+for _ext, _type in {".m4a": "audio/mp4", ".mp3": "audio/mpeg", ".aac": "audio/aac", ".opus": "audio/ogg",
+                    ".flac": "audio/flac", ".weba": "audio/webm", ".wav": "audio/wav"}.items():
+    mimetypes.add_type(_type, _ext)
 
 
 def _read_json(path: Path) -> dict | None:
@@ -109,10 +114,10 @@ class Jobs:
         self._lock = threading.Lock()
 
     def start(self, source: str, sequence: str = "", role: str = "all", view: str = "side",
-              kind: str = "analyze") -> Job:
+              kind: str = "analyze", speakers: str = "") -> Job:
         source = source.strip().strip('"')
         if not source:
-            raise ValueError("유튜브 링크나 영상 파일 경로를 넣어 주세요")
+            raise ValueError("유튜브 링크나 영상·녹음 파일 경로를 넣어 주세요")
         if role not in ("all", "leader", "follower") or view not in ("side", "front"):
             raise ValueError("역할이나 촬영 방향 값이 올바르지 않습니다")
         if kind not in ("analyze", "notes"):
@@ -130,6 +135,8 @@ class Jobs:
             out = None
         if kind == "notes":
             cmd = [*self.command, "notes", source, "--role", role]
+            if speakers.strip():
+                cmd += ["--speakers", speakers.strip()]
         else:
             cmd = [*self.command, "analyze", source, "--role", role, "--view", view]
             if sequence.strip():
@@ -186,8 +193,8 @@ class App:
 
 
     def notes_video(self, lesson: str) -> Path | None:
-        """The lesson video notes.json points at. It may live outside the lesson folder
-        (a 2-hour file isn't copied), so this is the one file served from elsewhere."""
+        """The lesson video (or audio recording) notes.json points at. It may live outside the
+        lesson folder (a 2-hour file isn't copied), so this is the one file served from elsewhere."""
         base = (self.home / lesson).resolve()
         if base.parent != self.home:
             return None
@@ -196,7 +203,7 @@ class App:
         if not ref:
             return None
         path = (base / ref).resolve()
-        if path.suffix.lower() not in VIDEO_EXTS or not path.is_file():
+        if path.suffix.lower() not in VIDEO_EXTS | AUDIO_EXTS or not path.is_file():
             return None
         return path
 
@@ -307,7 +314,7 @@ def make_handler(app: App):
                     b = self._body()
                     job = app.jobs.start(str(b.get("source", "")), str(b.get("sequence", "")),
                                          str(b.get("role", "all")), str(b.get("view", "side")),
-                                         str(b.get("kind", "analyze")))
+                                         str(b.get("kind", "analyze")), str(b.get("speakers", "")))
                     return self._json({"id": job.id}, 201)
                 return self._error(404, "없는 주소입니다")
             except (ValueError, KeyError, json.JSONDecodeError) as e:
