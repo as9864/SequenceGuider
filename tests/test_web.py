@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 import sys
 import threading
 import time
@@ -229,3 +230,31 @@ class TestMedia:
         assert lesson["title"] == "0920 시연" and lesson["media"][0]["analyze"] is False
         status, _, body = call(server, "/api/lessons", "POST", {"source": str(video)})
         assert json.loads(body)["id"] == "0920_시연_2_sequenceguider"
+
+
+def test_batch_import_folders(tmp_path):
+    from typer.testing import CliRunner
+
+    from sequenceguider.cli import app as cli
+    from sequenceguider.web import import_folders
+
+    inbox = tmp_path / "새 레슨"
+    (inbox / "1021 볼레오 수업" / "재생만").mkdir(parents=True)
+    for name in ("1부.m4a", "2부.mp4", "최종 시연.mp4", "메모.txt", "재생만/워밍업.mp4"):
+        (inbox / "1021 볼레오 수업" / name).write_bytes(b"")
+    (inbox / "빈 폴더").mkdir()
+    todo = import_folders(tmp_path, inbox)
+    assert [(l, Path(m["src"]).name) for l, m in todo] == [("1021_볼레오_수업_sequenceguider", "1부.m4a"),
+                                                           ("1021_볼레오_수업_sequenceguider", "2부.mp4")]
+    (lesson,) = find_lessons(tmp_path)
+    assert lesson["title"] == "1021 볼레오 수업"
+    assert {m["label"]: m["analyze"] for m in lesson["media"]} == {"1부": True, "2부": True, "최종 시연": False, "워밍업": False}
+    # notes done for one file, one more file dropped in: only the rest is left, nothing listed twice
+    done = tmp_path / todo[0][0] / todo[0][1]["dir"]
+    done.mkdir(parents=True)
+    (done / "notes.json").write_text("{}", encoding="utf-8")
+    (inbox / "1021 볼레오 수업" / "3부.mp3").write_bytes(b"")
+    assert [Path(m["src"]).name for _, m in import_folders(tmp_path, inbox)] == ["2부.mp4", "3부.mp3"]
+    assert len(find_lessons(tmp_path)[0]["media"]) == 5
+    res = CliRunner().invoke(cli, ["batch", str(inbox), "--home", str(tmp_path), "--dry-run"])
+    assert res.exit_code == 0 and "노트 만들 파일 2개" in res.output

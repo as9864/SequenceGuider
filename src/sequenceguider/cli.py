@@ -440,6 +440,44 @@ def notes(
 
 
 @app.command()
+def batch(
+    inbox: Path = typer.Argument(..., help="레슨별 폴더가 들어 있는 폴더. 폴더 하나 = 레슨 하나, 안의 영상·오디오 = 그 레슨의 미디어"),
+    home: Path = typer.Option(Path("."), help="웹 화면의 홈 폴더 (serve --home과 같게)"),
+    role: str = typer.Option("all", help="노트를 누구 관점으로 정리할지: all | leader | follower"),
+    whisper: str = typer.Option("turbo", help="음성 인식 모델 (notes와 같음)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="레슨만 만들고 노트는 만들지 않고 할 일만 보여 주기"),
+) -> None:
+    """폴더별로 레슨을 만들고, 분석할 영상·오디오의 노트를 차례로 만듭니다. 이름에 '시연'이 있는 파일은 재생만."""
+    import subprocess
+
+    from sequenceguider.web import import_folders
+
+    _check_role(role)
+    if not inbox.is_dir():
+        typer.echo(f"오류: 폴더가 없습니다: {inbox}", err=True)
+        raise typer.Exit(2)
+    home.mkdir(parents=True, exist_ok=True)
+    todo = import_folders(home, inbox)
+    typer.echo(f"노트 만들 파일 {len(todo)}개" + ("" if todo else " — 모두 끝났어요"))
+    for lesson, item in todo:
+        typer.echo(f"  {lesson}: {Path(item['src']).name}")
+    if dry_run:
+        return
+    failed = []
+    for i, (lesson, item) in enumerate(todo, 1):
+        typer.echo(f"\n[{i}/{len(todo)}] {lesson} · {Path(item['src']).name}")
+        # one file at a time: transcription already uses the whole GPU/CPU. A stopped run resumes per file.
+        cmd = [sys.executable, "-m", "sequenceguider.cli", "notes", item["src"], "--role", role, "--whisper", whisper,
+               "--out", str(home / lesson / item["dir"])]
+        if subprocess.run(cmd).returncode != 0:
+            failed.append(f"{lesson} · {Path(item['src']).name}")
+    if failed:
+        typer.echo("\n실패: " + ", ".join(failed) + "\n다시 실행하면 실패한 것만 다시 합니다.", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"\n끝났어요. 보기: sequenceguider serve --home {home}")
+
+
+@app.command()
 def serve(
     home: Path = typer.Option(Path("."), help="분석 결과(<이름>_sequenceguider/)와 연습 기록을 두는 폴더"),
     port: int = typer.Option(8765, help="포트"),

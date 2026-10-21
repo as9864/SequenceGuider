@@ -159,6 +159,43 @@ def find_lessons(home: Path) -> list[dict]:
     return sorted(lessons, key=lambda x: x["updated_at"], reverse=True)
 
 
+def folder_stem(name: str) -> str:
+    return re.sub(r'[\\/:*?"<>|\s]+', "_", name).strip("._")[:60] or "lesson"
+
+
+PLAY_ONLY = re.compile(r"시연|demo|재생만", re.IGNORECASE)
+
+
+def import_folders(home: Path, inbox: Path) -> list[tuple[str, dict]]:
+    """`sequenceguider batch`: each folder in `inbox` is one lesson, each video/audio in it one media item.
+
+    The lesson is <home>/<folder name>_sequenceguider/; running again adds only files not listed yet.
+    A file whose name says 시연/demo/재생만 (or that sits in a 재생만/ subfolder) is only played;
+    the others are marked for notes. Returns (lesson id, item) for every item still waiting for its notes.
+    """
+    home, todo = home.resolve(), []
+    for src_dir in sorted(p for p in inbox.iterdir() if p.is_dir() and not p.name.startswith(".")):
+        files = sorted(f for f in src_dir.rglob("*") if f.is_file() and f.suffix.lower() in VIDEO_EXTS | AUDIO_EXTS)
+        if not files:
+            continue
+        folder = home / f"{folder_stem(src_dir.name)}_sequenceguider"
+        folder.mkdir(exist_ok=True)
+        meta = load_lesson(folder) or {"title": src_dir.name, "media": []}
+        known = {str((folder / m["src"]).resolve()) for m in meta["media"] if m.get("src") and media_kind(m["src"]) in ("video", "audio")}
+        for f in files:
+            if str(f.resolve()) in known:
+                continue
+            mid = uuid.uuid4().hex[:8]
+            play_only = bool(PLAY_ONLY.search(str(f.relative_to(src_dir))))
+            meta["media"].append({"id": mid, "label": f.stem, "src": str(f.resolve()), "dir": f"media/{mid}",
+                                  "analyze": not play_only, "added_at": datetime.now().isoformat(timespec="seconds")})
+        save_lesson(folder, meta)
+        todo += [(folder.name, m) for m in meta["media"]
+                 if m.get("analyze") and media_kind(m.get("src")) in ("video", "audio")
+                 and not (folder / m.get("dir", "") / "notes.json").is_file()]
+    return todo
+
+
 def check_source(source: str) -> str:
     """A link as given, or a media file's absolute path."""
     source = source.strip().strip('"')
@@ -349,7 +386,7 @@ class App:
         """A lesson with one media item and no analysis yet."""
         source = check_source(source)
         name = title.strip() or (Path(source).stem if media_kind(source) in ("video", "audio") else "레슨")
-        stem = re.sub(r'[\\/:*?"<>|\s]+', "_", name).strip("._")[:60] or "lesson"
+        stem = folder_stem(name)
         with self._lock:
             folder, n = self.home / f"{stem}_sequenceguider", 2
             while folder.exists():
