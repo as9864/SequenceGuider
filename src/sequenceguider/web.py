@@ -32,8 +32,10 @@ _RANGE = re.compile(r"bytes=(\d*)-(\d*)$")
 VIDEO_EXTS = {".mp4", ".m4v", ".mov", ".webm", ".mkv", ".ogv"}
 AUDIO_EXTS = {".m4a", ".mp3", ".wav", ".aac", ".ogg", ".oga", ".opus", ".flac", ".weba"}
 LESSON_FILE = "lesson.json"
-for _ext, _type in {".m4a": "audio/mp4", ".opus": "audio/ogg", ".flac": "audio/flac", ".weba": "audio/webm"}.items():
-    mimetypes.add_type(_type, _ext)  # often missing from the Windows registry
+# Windows' registry often has no (or an odd) type for these, and <audio> needs a playable one
+for _ext, _type in {".m4a": "audio/mp4", ".mp3": "audio/mpeg", ".aac": "audio/aac", ".opus": "audio/ogg",
+                    ".flac": "audio/flac", ".weba": "audio/webm", ".wav": "audio/wav"}.items():
+    mimetypes.add_type(_type, _ext)
 
 
 def _read_json(path: Path) -> dict | None:
@@ -238,7 +240,7 @@ class Jobs:
         self._lock = threading.Lock()
 
     def start(self, source: str, sequence: str = "", role: str = "all", view: str = "side",
-              kind: str = "analyze", *, out: Path | None = None, lesson: str | None = None,
+              kind: str = "analyze", speakers: str = "", *, out: Path | None = None, lesson: str | None = None,
               media: str | None = None) -> Job:
         """Run `analyze` or `notes` on `source`. Without `out` it makes a new lesson folder in home
         (a link: where the command puts it); with `out` it writes there, e.g. a lesson's media/<id>/."""
@@ -256,6 +258,8 @@ class Jobs:
             out = out or self.home / f"{Path(source).stem}_sequenceguider"
         if kind == "notes":
             cmd = [*self.command, "notes", source, "--role", role]
+            if speakers.strip():
+                cmd += ["--speakers", speakers.strip()]
         else:
             cmd = [*self.command, "analyze", source, "--role", role, "--view", view]
             if sequence.strip():
@@ -368,7 +372,7 @@ class App:
         item["analyze"] = True
         return self.jobs.start(item["src"], str(analyze.get("sequence", "")), str(analyze.get("role", "all")),
                                str(analyze.get("view", "side")), str(analyze.get("kind", "notes")),
-                               out=folder / item["dir"], lesson=folder.name, media=item["id"])
+                               str(analyze.get("speakers", "")), out=folder / item["dir"], lesson=folder.name, media=item["id"])
 
     def remove_media(self, lesson: str, media: str) -> None:
         """Take an item off the lesson's list. Its files and analysis stay on disk."""
@@ -517,7 +521,7 @@ def make_handler(app: App):
                     b = self._body()
                     job = app.jobs.start(str(b.get("source", "")), str(b.get("sequence", "")),
                                          str(b.get("role", "all")), str(b.get("view", "side")),
-                                         str(b.get("kind", "analyze")))
+                                         str(b.get("kind", "analyze")), str(b.get("speakers", "")))
                     return self._json({"id": job.id}, 201)
                 return self._error(404, "없는 주소입니다")
             except (ValueError, KeyError, json.JSONDecodeError) as e:
