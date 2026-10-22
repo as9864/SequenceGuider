@@ -37,6 +37,7 @@ from pathlib import Path
 
 import numpy as np
 
+from sequenceguider import categories
 from sequenceguider.figures import FigureLibrary
 from sequenceguider.speakers import Speaker, Turn, diarize, is_korean, language_runs, speaker_at
 
@@ -404,8 +405,9 @@ def _notes_schema(figure_keys: list[str]) -> dict:
             "glossary": {"type": "array", "items": {
                 "type": "object", "properties": {"term": s, "meaning": s},
                 "required": ["term", "meaning"], "additionalProperties": False}},
+            "categories": {"type": "array", "items": {"type": "string", "enum": [c.id for c in categories.CATEGORIES]}},
         },
-        "required": ["title", "summary", "key_points", "sections", "practice", "glossary"],
+        "required": ["title", "summary", "key_points", "sections", "practice", "glossary", "categories"],
         "additionalProperties": False,
     }
 
@@ -431,6 +433,8 @@ def _notes_system(library: FigureLibrary, role: str, speakers: list[Speaker] = (
   figures에는 그 구간에서 다룬 피구라를 목록의 키로만 넣고, 목록에 없으면 비워 두세요.
 - practice: 집에서 혼자 또는 파트너와 연습할 것 3~8개. 레슨에서 실제로 한 연습·지적에서 뽑고, t는 관련 설명 시점.
 - glossary: 레슨에 나온 탱고 용어와 강사가 쓴 독특한 표현을 짧게 풀이 (최대 12개).
+- categories: 이 레슨이 실제로 가르친 주제를 아래 카테고리 키로 (여러 개 가능, 잠깐 언급만 한 것은 빼기).
+  {", ".join(f"{c.id}({c.name_ko})" for c in categories.CATEGORIES)}
 
 규칙:
 - 자막에 실제로 있는 내용만. 일반 탱고 상식을 지어 넣지 마세요.
@@ -479,6 +483,7 @@ def clean_notes(raw: dict, duration: float, figure_keys: list[str]) -> dict:
         "practice": [{"text": str(p["text"]).strip(), "t": t(p.get("t"))}
                      for p in raw.get("practice", []) if str(p.get("text", "")).strip()],
         "glossary": [g for g in raw.get("glossary", []) if str(g.get("term", "")).strip()],
+        "categories": categories.clean(raw.get("categories", [])),
     }
 
 

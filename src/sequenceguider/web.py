@@ -18,6 +18,7 @@ import subprocess
 import sys
 import threading
 import uuid
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from http import HTTPStatus
@@ -25,6 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
+from sequenceguider import categories
 from sequenceguider.records import Records
 
 APP_HTML = Path(__file__).parent / "web" / "app.html"
@@ -105,7 +107,22 @@ def load_lesson(folder: Path) -> dict | None:
     src = root["notes_media"]
     if not src and root["guide_video"] and (folder / root["guide_video"]).is_file():
         src = root["guide_video"]  # `analyze` copies the video into the folder
-    return {"media": [{"id": "main", "label": "", "src": src or root["source_url"], "dir": "", "analyze": True}]}
+    extra = meta if isinstance(meta, dict) else {}  # e.g. categories saved before the first media list
+    return {**extra, "media": [{"id": "main", "label": "", "src": src or root["source_url"], "dir": "", "analyze": True}]}
+
+
+_suggest_cache: dict[str, tuple[tuple, list[str]]] = {}
+
+
+def suggested_categories(folder: Path, title: str = "") -> list[str]:
+    """categories.suggest_for_folder, remembered until one of the files it reads changes."""
+    stamps = tuple(p.stat().st_mtime if p.is_file() else 0.0
+                   for p in (folder / n for n in ("result.json", "notes.json", "transcript.json")))
+    key = f"{folder}\0{title}"
+    hit = _suggest_cache.get(key)
+    if hit is None or hit[0] != stamps:
+        hit = _suggest_cache[key] = (stamps, categories.suggest_for_folder(folder, title) if any(stamps) else [])
+    return hit[1]
 
 
 def save_lesson(folder: Path, meta: dict) -> None:
@@ -146,9 +163,15 @@ def find_lessons(home: Path) -> list[dict]:
                 "added_at": item.get("added_at"),
             })
         notes = next((m["notes"] for m in media if m["notes"]), None)
+        name = meta.get("title") or title or folder.name.removesuffix("_sequenceguider")
+        suggested = categories.clean(c for m in media for c in suggested_categories(folder / m["dir"], name))
         lessons.append({
             "id": folder.name,
-            "title": meta.get("title") or title or folder.name.removesuffix("_sequenceguider"),
+            "title": name,
+            # saved by the user once edited; until then what the analyses suggest
+            "categories": categories.clean(meta["categories"]) if "categories" in meta else suggested,
+            "categories_auto": "categories" not in meta,
+            "suggested_categories": suggested,
             "source_url": source_url,
             "role": role,
             "media": media,
@@ -225,6 +248,7 @@ class Job:
     status: str = "running"  # running | done | failed
     lesson: str | None = None
     media: str | None = None  # the media item it analyses, when added to an existing lesson
+    categories: list[str] = field(default_factory=list)  # picked when starting it: added to its lesson when done
     log: str = ""
     _proc: subprocess.Popen | None = field(default=None, repr=False)
 
@@ -232,8 +256,9 @@ class Job:
 class Jobs:
     """Analyses started from the page, run as `sequenceguider analyze` subprocesses in `home`."""
 
-    def __init__(self, home: Path):
+    def __init__(self, home: Path, on_done: Callable[[Job], None] | None = None):
         self.home = home
+        self.on_done = on_done
         self.dir = home / ".jobs"
         self._jobs: dict[str, Job] = {}
         self.command = [sys.executable, "-m", "sequenceguider.cli"]  # tests swap in a stand-in
@@ -241,7 +266,7 @@ class Jobs:
 
     def start(self, source: str, sequence: str = "", role: str = "all", view: str = "side",
               kind: str = "analyze", speakers: str = "", *, out: Path | None = None, lesson: str | None = None,
-              media: str | None = None) -> Job:
+              media: str | None = None, categories_: list | None = None) -> Job:
         """Run `analyze` or `notes` on `source`. Without `out` it makes a new lesson folder in home
         (a link: where the command puts it); with `out` it writes there, e.g. a lesson's media/<id>/."""
         source = check_source(source)
@@ -268,7 +293,8 @@ class Jobs:
             cmd += ["--out", str(out)]
         self.dir.mkdir(parents=True, exist_ok=True)
         job = Job(id=uuid.uuid4().hex[:8], kind=kind, source=source, sequence=sequence.strip(), role=role, view=view,
-                  started_at=datetime.now().isoformat(timespec="seconds"), lesson=lesson, media=media)
+                  started_at=datetime.now().isoformat(timespec="seconds"), lesson=lesson, media=media,
+                  categories=categories.clean(categories_))
         log = open(self.dir / f"{job.id}.log", "wb")
         env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
         job._proc = subprocess.Popen(cmd, cwd=self.home, stdout=log, stderr=subprocess.STDOUT, env=env)
@@ -289,6 +315,8 @@ class Jobs:
             job.status = "done" if job._proc.returncode == 0 else "failed"
             if job.lesson is None and (m := re.search(r"(?:리포트|노트): (.+)", raw)):
                 job.lesson = Path(m.group(1).strip()).parent.name
+            if job.status == "done" and job.lesson and job.categories and self.on_done:
+                self.on_done(job)
 
     def list(self) -> list[dict]:
         with self._lock:
@@ -305,8 +333,31 @@ class App:
         self.home = home.resolve()
         self.home.mkdir(parents=True, exist_ok=True)
         self.records = Records(self.home / "records.db")
-        self.jobs = Jobs(self.home)
+        self.jobs = Jobs(self.home, on_done=lambda job: self.add_categories(job.lesson, job.categories))
         self._lock = threading.Lock()  # lesson.json read-modify-write
+
+    def lessons(self) -> list[dict]:
+        self.jobs.list()  # a finished job adds the categories picked for it before the list is read
+        return find_lessons(self.home)
+
+    def set_categories(self, lesson: str, ids: list) -> list[str]:
+        """The user's own list for the lesson. From now on it's kept as is, not re-suggested."""
+        folder = self._folder(lesson)
+        with self._lock:
+            meta = load_lesson(folder)
+            if meta is None:
+                raise KeyError("없는 레슨입니다")
+            meta["categories"] = categories.clean(ids)
+            save_lesson(folder, meta)
+        return meta["categories"]
+
+    def add_categories(self, lesson: str, ids: list) -> None:
+        """Categories picked when an analysis was started, on top of the lesson's current ones."""
+        try:
+            current = next(x["categories"] for x in find_lessons(self.home) if x["id"] == lesson)
+            self.set_categories(lesson, [*current, *ids])
+        except (KeyError, StopIteration):
+            pass
 
     def lesson_file(self, lesson: str, rel: str) -> Path | None:
         base = (self.home / lesson).resolve()
@@ -386,7 +437,7 @@ class App:
                 raise ValueError("레슨에는 미디어가 하나는 있어야 해요")
             save_lesson(folder, {**meta, "media": rest})
 
-    def new_lesson(self, source: str, title: str = "") -> str:
+    def new_lesson(self, source: str, title: str = "", categories_: list | None = None) -> str:
         """A lesson with one media item and no analysis yet."""
         source = check_source(source)
         name = title.strip() or (Path(source).stem if media_kind(source) in ("video", "audio") else "레슨")
@@ -396,10 +447,21 @@ class App:
             while folder.exists():
                 folder, n = self.home / f"{stem}_{n}_sequenceguider", n + 1
             folder.mkdir()
-            save_lesson(folder, {"title": name, "media": [
+            meta = {"title": name, "media": [
                 {"id": "main", "label": "", "src": source, "dir": "", "analyze": False,
-                 "added_at": datetime.now().isoformat(timespec="seconds")}]})
+                 "added_at": datetime.now().isoformat(timespec="seconds")}]}
+            if categories_:
+                meta["categories"] = categories.clean(categories_)
+            save_lesson(folder, meta)
         return folder.name
+
+
+def _id_list(value) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("카테고리는 목록으로 보내 주세요")
+    return [str(v) for v in value]
 
 
 def make_handler(app: App):
@@ -482,10 +544,15 @@ def make_handler(app: App):
                     f = app.lesson_file(lesson, rel or "index.html")
                     return self._file(f) if f else self._error(404, "없는 파일입니다")
                 if path == "/api/lessons" and method == "GET":
-                    return self._json(find_lessons(app.home))
+                    return self._json(app.lessons())
                 if path == "/api/lessons" and method == "POST":
                     b = self._body()
-                    return self._json({"id": app.new_lesson(str(b.get("source", "")), str(b.get("title", "")))}, 201)
+                    return self._json({"id": app.new_lesson(str(b.get("source", "")), str(b.get("title", "")),
+                                                            _id_list(b.get("categories")))}, 201)
+                if path == "/api/categories" and method == "GET":
+                    return self._json(categories.as_json())
+                if (m := re.fullmatch(r"/api/lessons/([^/]+)/categories", path)) and method == "PUT":
+                    return self._json({"categories": app.set_categories(m.group(1), _id_list(self._body().get("categories")))})
                 if (m := re.fullmatch(r"/api/lessons/([^/]+)/media", path)) and method == "POST":
                     b = self._body()
                     item = app.add_media(m.group(1), str(b.get("source", "")), str(b.get("label", "")),
@@ -521,7 +588,8 @@ def make_handler(app: App):
                     b = self._body()
                     job = app.jobs.start(str(b.get("source", "")), str(b.get("sequence", "")),
                                          str(b.get("role", "all")), str(b.get("view", "side")),
-                                         str(b.get("kind", "analyze")), str(b.get("speakers", "")))
+                                         str(b.get("kind", "analyze")), str(b.get("speakers", "")),
+                                         categories_=_id_list(b.get("categories")))
                     return self._json({"id": job.id}, 201)
                 return self._error(404, "없는 주소입니다")
             except (ValueError, KeyError, json.JSONDecodeError) as e:

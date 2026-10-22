@@ -139,6 +139,16 @@ mark { background: #ffe58a; color: #1d1d1f; border-radius: 3px; }
 .notice { border: 1px dashed var(--line); border-radius: 10px; padding: 10px 12px; font-size: .9rem; margin-bottom: 10px; }
 .check { display:flex; gap: 8px; align-items:flex-start; padding: 6px 0; }
 .check input { width: auto; margin-top: 4px; }
+.chip.cat { border-color: var(--accent); color: var(--accent); font-weight: 600; background: none; }
+.catbar { display:flex; gap: 6px; flex-wrap: wrap; margin: 12px 0; }
+.catpick-box summary { cursor: pointer; font-size: .85rem; font-weight: 600; margin: 10px 0 4px; }
+.catbar button { border-radius: 999px; padding: 3px 11px; font-size: .85rem; }
+.catbar button.on { background: var(--fg); color: var(--bg); border-color: var(--fg); font-weight: 600; }
+.catbar button .n { color: var(--muted); font-size: .75rem; margin-left: 3px; }
+.catbar button.on .n { color: inherit; opacity: .7; }
+.cat-strip { max-width: 1100px; margin: 0 auto; padding: 0 16px 8px; display:flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+.catpick h3 { font-size: .8rem; color: var(--muted); margin: 10px 0 4px; }
+.catpick .sug { font-size: .7rem; color: var(--accent); font-weight: 700; }
 dl.gloss dt { font-weight: 700; margin-top: 8px; } dl.gloss dd { margin: 0; }
 @media (max-width: 900px) {
   .nv { grid-template-columns: 1fr; padding-top: 0; }
@@ -212,13 +222,25 @@ dl.gloss dt { font-weight: 700; margin-top: 8px; } dl.gloss dd { margin: 0; }
     </div>
   </form>
 </dialog>
+<dialog id="cat-dialog">
+  <form method="dialog" id="cat-form">
+    <h2 style="margin-top:0">카테고리</h2>
+    <p class="small muted" style="margin:0">이 레슨에서 다룬 것을 모두 고르세요. <span class="sug">추천</span>은 분석 결과에서 찾은 것이에요.</p>
+    <div class="catpick" id="cat-pick"></div>
+    <div class="error" id="cat-error"></div>
+    <div class="row" style="justify-content:flex-end; margin-top: 14px">
+      <button type="button" id="cat-cancel">취소</button>
+      <button class="primary" id="cat-save">저장</button>
+    </div>
+  </form>
+</dialog>
 <div class="toast" id="toast"></div>
 
 <script>
 const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const view = $('#view'), lessonBar = $('#lesson-bar');
-const state = { lessons: [], checks: {}, sessions: [], jobs: [] };
+const state = { lessons: [], checks: {}, sessions: [], jobs: [], categories: [] };
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
   set(k, v) { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} },
@@ -234,7 +256,17 @@ async function api(path, opts = {}) {
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 1800); }
 async function load() {
   [state.lessons, state.checks, state.sessions] = await Promise.all([api('/api/lessons'), api('/api/checks'), api('/api/sessions')]);
+  if (!state.categories.length) state.categories = await api('/api/categories');
 }
+const catName = id => state.categories.find(c => c.id === id)?.name_ko || id;
+const catChips = ids => ids.map(c => `<span class="chip cat">${esc(catName(c))}</span>`).join('');
+function catPicker(selected, suggested = []) {  // checkboxes grouped like 기본기 / 피구라 / ...
+  const groups = [...new Set(state.categories.map(c => c.group))];
+  return groups.map(g => `<h3>${esc(g)}</h3><div class="figpick">${state.categories.filter(c => c.group === g).map(c =>
+    `<label><input type="checkbox" value="${esc(c.id)}" ${selected.includes(c.id) ? 'checked' : ''}>${esc(c.name_ko)}${
+      suggested.includes(c.id) ? ' <span class="sug">추천</span>' : ''}</label>`).join('')}</div>`).join('');
+}
+const pickedCats = el => [...el.querySelectorAll('input:checked')].map(i => i.value);
 
 const today = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 10); };
 const fmtDay = s => { const [y, m, d] = s.split('-'); return `${+m}월 ${+d}일`; };
@@ -292,7 +324,15 @@ window.SG = {
 // ---------------------------------------------------------------- library
 async function renderLibrary() {
   lessonBar.innerHTML = '';
-  const lessons = state.lessons;
+  const all = state.lessons;
+  const counts = {}; all.forEach(l => l.categories.forEach(c => { counts[c] = (counts[c] || 0) + 1; }));
+  let cat = store.get('sg.cat');
+  if (cat && !counts[cat]) cat = null;
+  const lessons = cat ? all.filter(l => l.categories.includes(cat)) : all;
+  const catbar = Object.keys(counts).length ? `<div class="catbar" role="toolbar" aria-label="카테고리별 보기">
+    <button data-cat="" class="${cat ? '' : 'on'}">전체<span class="n">${all.length}</span></button>
+    ${state.categories.filter(c => counts[c.id]).map(c =>
+      `<button data-cat="${esc(c.id)}" class="${cat === c.id ? 'on' : ''}">${esc(c.name_ko)}<span class="n">${counts[c.id]}</span></button>`).join('')}</div>` : '';
   const cards = lessons.map(l => {
     const p = progress(l), last = lastPracticed(l.id);
     const pct = p.total ? Math.round(100 * p.done / p.total) : 0;
@@ -300,7 +340,7 @@ async function renderLibrary() {
       <div class="row" style="gap:6px">${l.notes ? `<span class="badge notes">노트${l.notes.duration_s ? ' · ' + fmtHMS(l.notes.duration_s) : ''}</span>` : ''}${l.has_guide ? '<span class="badge">동작 분석</span>' : ''}${l.media.length > 1 ? `<span class="chip">${l.media.map(mediaIcon).join('')} ${l.media.length}개</span>` : ''}</div>
       <h3>${esc(l.title)}</h3>
       ${l.notes?.summary ? `<div class="small muted clamp">${esc(l.notes.summary)}</div>` : ''}
-      <div class="chips">${lessonFigures(l).map(f => `<span class="chip">${esc(label(f))}</span>`).join('')}</div>
+      <div class="chips">${l.categories.length ? catChips(l.categories) : lessonFigures(l).map(f => `<span class="chip">${esc(label(f))}</span>`).join('')}</div>
       <div><div class="row between small"><span>연습 체크리스트 ${p.done}/${p.total}</span><span class="muted">${pct}%</span></div>
       <div class="meter"><div style="width:${pct}%"></div></div></div>
       <div class="small muted">${last ? `마지막 연습 ${fmtDay(last)}` : '아직 연습 기록 없음'}</div>
@@ -308,6 +348,7 @@ async function renderLibrary() {
   }).join('');
   view.innerHTML = `<main>
     <div class="row between"><h1>내 레슨</h1><button class="primary" id="new-btn">＋ 새 레슨</button></div>
+    ${catbar}
     <section class="panel" id="new-panel" hidden>
       <form id="new-form">
         <label class="tick" style="margin-top:0"><input type="checkbox" id="nf-analyze" checked><span>분석이 필요해요
@@ -329,6 +370,8 @@ async function renderLibrary() {
         </div>
         <div class="notes-only"><label class="field" for="nf-speakers">화자 <span class="muted small">(여러 명이면. 이름=성별/언어, 쉼표로 구분)</span></label>
         <input id="nf-speakers" placeholder="남자 강사=남/en, 여자 강사=여/en, 통역=남/ko"></div>
+        <details class="catpick-box"><summary class="field">카테고리 <span class="muted small">(선택 · 여러 개. 비워 두면 분석 결과로 자동 추천해요)</span></summary>
+        <div class="catpick" id="nf-cats">${catPicker([])}</div></details>
         <div class="analyze-only"><label class="field" for="nf-seq">시퀀스 순서 <span class="muted small">(유튜브는 비워 두면 챕터·설명란에서 읽어요)</span></label>
         <input id="nf-seq" placeholder="살리다, 오초 아뜨라스 x3, 푸에라 데 에헤"></div>
         <p class="small muted" id="nf-hint"></p>
@@ -341,6 +384,7 @@ async function renderLibrary() {
       `<div class="panel empty" style="margin-top:16px"><p><b>아직 분석한 영상이 없어요.</b></p>
        <p class="muted">위의 <b>새 영상 분석</b>에 유튜브 링크를 넣거나, 이 폴더에서 <code>sequenceguider analyze</code>를 실행하면 여기에 나타납니다.</p></div>`}
   </main>`;
+  view.querySelectorAll('[data-cat]').forEach(b => b.onclick = () => { store.set('sg.cat', b.dataset.cat || null); renderLibrary(); });
   const panel = $('#new-panel');
   $('#new-btn').onclick = () => { panel.hidden = !panel.hidden; if (!panel.hidden) $('#nf-source').focus(); };
   const kindChanged = () => {
@@ -362,13 +406,16 @@ async function renderLibrary() {
     $('#nf-error').textContent = '';
     try {
       if (!$('#nf-analyze').checked) {
-        const { id } = await api('/api/lessons', { method: 'POST', body: { source: $('#nf-source').value, title: $('#nf-title').value } });
+        const { id } = await api('/api/lessons', { method: 'POST', body: { source: $('#nf-source').value, title: $('#nf-title').value,
+                                                                            categories: pickedCats($('#nf-cats')) } });
         location.hash = '#/lesson/' + encodeURIComponent(id);
         return;
       }
       await api('/api/jobs', { method: 'POST', body: { kind: $('#nf-kind').value, source: $('#nf-source').value, sequence: $('#nf-seq').value,
-                                                         role: $('#nf-role').value, view: $('#nf-view').value, speakers: $('#nf-speakers').value } });
+                                                         role: $('#nf-role').value, view: $('#nf-view').value, speakers: $('#nf-speakers').value,
+                                                         categories: pickedCats($('#nf-cats')) } });
       $('#nf-source').value = ''; $('#nf-seq').value = '';
+      $('#nf-cats').querySelectorAll('input').forEach(i => { i.checked = false; });
       pollJobs();
     } catch (err) { $('#nf-error').textContent = err.message; }
   };
@@ -412,8 +459,12 @@ function renderLessonBar() {
     const [cls, tag] = mediaTag(currentLesson, m);
     return `<a class="mchip ${m === item ? 'on' : ''}" href="#/lesson/${id}${m === currentLesson.media[0] ? '' : '/' + m.id}">
       <span>${mediaIcon(m)}</span><span>${esc(mediaName(currentLesson, m))}</span><span class="tag ${cls}">${tag}</span></a>`;
-  }).join('')}<button class="mchip add" id="media-add">＋ 영상·오디오 추가</button></nav>`;
+  }).join('')}<button class="mchip add" id="media-add">＋ 영상·오디오 추가</button></nav>
+  <div class="cat-strip">${currentLesson.categories.length ? catChips(currentLesson.categories) : '<span class="small muted">카테고리 없음</span>'}
+    ${currentLesson.categories_auto && currentLesson.categories.length ? '<span class="small muted">자동 추천</span>' : ''}
+    <button class="link small" id="cat-edit">카테고리 편집</button></div>`;
   $('#media-add').onclick = () => openMediaDialog(null);
+  $('#cat-edit').onclick = openCategories;
   if (started) {
     const tick = () => { const el = $('#timer'); if (el) el.textContent = fmtT((Date.now() - started) / 1000); };
     tick(); clearInterval(renderLessonBar.iv); renderLessonBar.iv = setInterval(tick, 1000);
@@ -710,6 +761,25 @@ async function renderNotes(lesson, item) {
     }
   }, 400);
 }
+
+// ---------------------------------------------------------------- categories of the open lesson
+function openCategories() {
+  $('#cat-pick').innerHTML = catPicker(currentLesson.categories, currentLesson.suggested_categories);
+  $('#cat-error').textContent = '';
+  $('#cat-dialog').showModal();
+}
+$('#cat-cancel').onclick = () => $('#cat-dialog').close();
+$('#cat-form').onsubmit = async e => {
+  e.preventDefault();
+  const lesson = currentLesson;
+  try {
+    const { categories } = await api(`/api/lessons/${encodeURIComponent(lesson.id)}/categories`, { method: 'PUT', body: { categories: pickedCats($('#cat-pick')) } });
+    Object.assign(lesson, { categories, categories_auto: false });
+    $('#cat-dialog').close();
+    if (currentLesson === lesson) { renderLessonBar(); document.documentElement.style.setProperty('--head', $('header.top').offsetHeight + 'px'); }
+    toast('카테고리를 저장했어요');
+  } catch (err) { $('#cat-error').textContent = err.message; }
+};
 
 let logFromTimer = false;
 function openLog(minutes, fromTimer) {
