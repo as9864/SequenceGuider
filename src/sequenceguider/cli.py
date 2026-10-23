@@ -318,9 +318,11 @@ def _progress(label: str):
 
 @app.command()
 def notes(
-    video: str = typer.Argument(..., help="레슨 영상 파일 경로 또는 유튜브 링크"),
+    video: str = typer.Argument(..., help="레슨 영상·녹음 파일 경로(mp4, m4a, mp3 ...) 또는 유튜브 링크"),
     out: Path = typer.Option(None, help="출력 폴더 (기본: <영상이름>_sequenceguider/, analyze와 같은 폴더)"),
     language: str = typer.Option(None, help="레슨 언어 (es, en, ko ...). 비우면 자동 감지"),
+    speakers: str = typer.Option(None, help='화자 구분: "남자 강사=남/en, 여자 강사=여/en, 통역=남/ko". '
+                                              "언어가 둘 이상이면 줄마다 언어를 감지합니다"),
     translate: bool = typer.Option(True, help="자막을 한국어로 번역"),
     summary: bool = typer.Option(True, help="핵심 포인트·레슨 흐름·연습 체크리스트 정리"),
     role: str = typer.Option("all", help="누구 관점으로 정리할지: all | leader | follower"),
@@ -329,15 +331,23 @@ def notes(
     again: bool = typer.Option(False, "--again", help="핵심 정리를 새로 만들기 (자막·번역은 재사용)"),
     library: Path = typer.Option(None, help="다른 figures.yaml 사용"),
 ) -> None:
-    """긴 레슨 영상 → 자막(전사) + 한국어 번역 + 핵심 포인트·흐름·연습 체크리스트."""
+    """긴 레슨 영상·녹음 → 자막(전사, 화자 구분) + 한국어 번역 + 핵심 포인트·흐름·연습 체크리스트."""
     import json
+    from dataclasses import asdict
     from datetime import datetime
 
     from sequenceguider import notes as N
     from sequenceguider.figures import DEFAULT_LIBRARY, FigureLibrary
+    from sequenceguider.speakers import parse_speakers
     from sequenceguider.youtube import is_url
 
     _check_role(role)
+    try:
+        voices = parse_speakers(speakers) if speakers else []
+    except ValueError as e:
+        typer.echo(f"오류: {e}", err=True)
+        raise typer.Exit(2)
+    multilingual = len({p.language for p in voices if p.language}) > 1
     lib = FigureLibrary.load(library or DEFAULT_LIBRARY)
     source_url = None
     if is_url(video):
@@ -363,20 +373,41 @@ def notes(
 
     # 1. transcript (cached per 10-minute chunk under .notes_cache/, so a stopped run resumes)
     loaded = N.load_transcript(out)
-    if loaded and loaded[3] == whisper and (language is None or loaded[1] == language):
-        segments, lang, duration, _ = loaded
+    if (loaded and loaded[3] == whisper and (language is None or loaded[1] == language)
+            and loaded[4].get("speakers", []) == [asdict(p) for p in voices]):
+        segments, lang, duration, _, _ = loaded
         typer.echo(f"자막 재사용: transcript.json ({len(segments)}줄)")
     else:
-        typer.echo(f"받아 적는 중 (Whisper {whisper}, 첫 실행 시 모델 다운로드). 영상 길이에 따라 오래 걸릴 수 있어요...")
-        bar, update = _progress("받아쓰기")
         try:
+            audio, turns, model_ = N.load_audio(media), None, None
+            if voices:
+                # who talks when first: it decides each stretch's language and each line's speaker
+                typer.echo(f"화자 구분 중 ({', '.join(p.name for p in voices)}): 목소리와 언어로...")
+                model_ = N._whisper(whisper)
+                bar, update = _progress("화자 구분")
+                lines = []
+                with bar:
+                    turns = N.find_turns(audio, voices, out / ".notes_cache", whisper=model_, progress=update,
+                                         log=lines.append)
+                for line in lines:
+                    typer.echo("  " + line)
+            typer.echo(f"받아 적는 중 (Whisper {whisper}, 첫 실행 시 모델 다운로드). 길이에 따라 오래 걸릴 수 있어요...")
+            bar, update = _progress("받아쓰기")
             with bar:
                 segments, lang, duration = N.transcribe(media, out / ".notes_cache", model=whisper, language=language,
-                                                        vocabulary=N.tango_vocabulary(lib), progress=update)
+                                                        vocabulary=N.tango_vocabulary(lib), progress=update,
+                                                        whisper=model_, audio=audio, turns=turns)
         except N.NotesError as e:
             typer.echo(f"오류: {e}", err=True)
             raise typer.Exit(1)
-        N.save_transcript(out, segments, lang, duration, whisper)
+        if voices:
+            talk = {p.name: sum(s.end - s.start for s in segments if s.speaker == p.name) / 60 for p in voices}
+            typer.echo("화자별 말한 시간: " + ", ".join(f"{k} {v:.0f}분" for k, v in talk.items()))
+
+    def save() -> None:
+        N.save_transcript(out, segments, lang, duration, whisper, speakers=voices)
+
+    save()
     N.write_srt(segments, out / "transcript.srt")
     typer.echo(f"언어: {N.LANGUAGE_NAMES.get(lang, lang)}, {len(segments)}줄, {N.fmt_ts(duration)}")
 
@@ -387,7 +418,9 @@ def notes(
     problem = None
 
     # 2–3. Claude: translation, then key points
-    need_translation = translate and lang != "ko" and any(not s.ko for s in segments)
+    # a Korean lesson needs no translation; a mixed one (an interpreter) does for its other lines
+    need_translation = translate and (lang != "ko" or multilingual) and any(
+        not s.ko and not N.is_korean(s.text) for s in segments)
     need_summary = summary and not result.get("key_points")
     if need_translation or need_summary:
         try:
@@ -395,15 +428,16 @@ def notes(
             if need_translation:
                 bar, update = _progress("번역")
                 with bar:
-                    N.translate(segments, lang, lib, client, model=model, progress=update,
-                                save=lambda: N.save_transcript(out, segments, lang, duration, whisper))
+                    N.translate(segments, lang, lib, client, model=model, progress=update, save=save, speakers=voices)
             if need_summary:
                 typer.echo("핵심 정리 중...")
-                result = N.key_points(segments, duration, lib, client, role=role, model=model)
+                result = N.key_points(segments, duration, lib, client, role=role, model=model, speakers=voices)
         except Exception as e:  # missing key, network, API errors: keep what we have
             problem = str(e) or type(e).__name__
             typer.echo(f"\n번역·핵심 정리를 끝내지 못했습니다 — {problem}", err=True)
             typer.echo("ANTHROPIC_API_KEY를 설정하고 같은 명령을 다시 실행하면 이어서 합니다 (받아쓴 자막은 재사용).", err=True)
+    N.korean_lines(segments)
+    save()
     if any(s.ko for s in segments):
         N.write_srt(segments, out / "transcript.ko.srt", korean=True)
 
@@ -412,7 +446,9 @@ def notes(
         "source_title": title,
         "source_url": source_url,
         "video": N.video_ref(out, video_file),
+        "media": "audio" if video_file and video_file.suffix.lower() in N.AUDIO_EXTS else "video",
         "language": lang,
+        "speakers": [asdict(p) for p in voices],
         "duration_s": round(duration, 2),
         "role": role,
         "model": model if result.get("key_points") else None,
@@ -437,6 +473,49 @@ def notes(
             typer.echo(f"  {N.fmt_ts(p['t']):>8}  [{N.KINDS[p['kind']]}] {p['point']}")
     typer.echo(f"\n노트: {notes_path}")
     typer.echo("웹에서 영상과 함께 보기: sequenceguider serve --home " + str(out.resolve().parent))
+
+
+@app.command()
+def batch(
+    inbox: Path = typer.Argument(..., help="레슨별 폴더가 들어 있는 폴더. 폴더 하나 = 레슨 하나, 안의 영상·오디오 = 그 레슨의 미디어"),
+    home: Path = typer.Option(Path("."), help="웹 화면의 홈 폴더 (serve --home과 같게)"),
+    role: str = typer.Option("all", help="노트를 누구 관점으로 정리할지: all | leader | follower"),
+    whisper: str = typer.Option("turbo", help="음성 인식 모델 (notes와 같음)"),
+    speakers: str = typer.Option("", help="모든 파일의 화자 (notes --speakers와 같음). 폴더에 speakers.txt가 있으면 그 폴더는 그것을 씀"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="레슨만 만들고 노트는 만들지 않고 할 일만 보여 주기"),
+) -> None:
+    """폴더별로 레슨을 만들고, 분석할 영상·오디오의 노트를 차례로 만듭니다. 이름에 '시연'이 있는 파일은 재생만."""
+    import subprocess
+
+    from sequenceguider.web import import_folders
+
+    _check_role(role)
+    if not inbox.is_dir():
+        typer.echo(f"오류: 폴더가 없습니다: {inbox}", err=True)
+        raise typer.Exit(2)
+    home.mkdir(parents=True, exist_ok=True)
+    todo = import_folders(home, inbox)
+    typer.echo(f"노트 만들 파일 {len(todo)}개" + ("" if todo else " — 모두 끝났어요"))
+    for lesson, item in todo:
+        typer.echo(f"  {lesson}: {Path(item['src']).name}")
+    if dry_run:
+        return
+    failed = []
+    for i, (lesson, item) in enumerate(todo, 1):
+        typer.echo(f"\n[{i}/{len(todo)}] {lesson} · {Path(item['src']).name}")
+        # one file at a time: transcription already uses the whole GPU/CPU. A stopped run resumes per file.
+        cmd = [sys.executable, "-m", "sequenceguider.cli", "notes", item["src"], "--role", role, "--whisper", whisper,
+               "--out", str(home / lesson / item["dir"])]
+        txt = next((p / "speakers.txt" for p in Path(item["src"]).parents if (p / "speakers.txt").is_file() and p.is_relative_to(inbox.resolve())), None)
+        who = txt.read_text(encoding="utf-8").strip() if txt else speakers.strip()
+        if who:
+            cmd += ["--speakers", who]
+        if subprocess.run(cmd).returncode != 0:
+            failed.append(f"{lesson} · {Path(item['src']).name}")
+    if failed:
+        typer.echo("\n실패: " + ", ".join(failed) + "\n다시 실행하면 실패한 것만 다시 합니다.", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"\n끝났어요. 보기: sequenceguider serve --home {home}")
 
 
 @app.command()
