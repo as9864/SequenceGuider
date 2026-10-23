@@ -413,7 +413,7 @@ def notes(
 
     notes_path = out / "notes.json"
     previous = json.loads(notes_path.read_text(encoding="utf-8")) if notes_path.exists() else {}
-    result = {k: previous.get(k) for k in ("title", "summary", "key_points", "sections", "practice", "glossary")
+    result = {k: previous.get(k) for k in ("title", "summary", "key_points", "sections", "practice", "glossary", "categories")
               if previous.get(k) and not again}
     problem = None
 
@@ -459,6 +459,7 @@ def notes(
         "sections": result.get("sections", []),
         "practice": N.practice_ids(out.resolve().name, result.get("practice", [])),
         "glossary": result.get("glossary", []),
+        "categories": result.get("categories", []),
         "figure_names": {k: f.name_ko for k, f in lib.figures.items()
                          if any(k in s["figures"] for s in result.get("sections", []))},
         "translated": any(s.ko for s in segments),
