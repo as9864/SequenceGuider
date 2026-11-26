@@ -14,7 +14,7 @@ import sequenceguider.notes as N
 from sequenceguider.cli import app
 from sequenceguider.figures import FigureLibrary
 from sequenceguider.web import Jobs, find_lessons, make_server
-from tests.test_web import call
+from tests.test_web import call, log_in_admin
 
 LIB = FigureLibrary.load()
 pytest.importorskip("faster_whisper")
@@ -197,6 +197,7 @@ def test_notes_video_served_from_outside_the_lesson(tmp_path):
     srv = make_server(home, port=0)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{srv.server_address[1]}"
+    log_in_admin(base)
     try:
         status, headers, body = call(base, "/lessons/l_sequenceguider/notes-video", headers={"Range": "bytes=0-9"})
         assert status == 206 and body == bytes(range(10))

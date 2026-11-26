@@ -8,3 +8,5 @@ dist/
 /models/
 /out/
 /data/
+.env
+/subdata/

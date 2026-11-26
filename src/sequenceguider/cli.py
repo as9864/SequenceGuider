@@ -477,19 +477,30 @@ def notes(
 
 @app.command()
 def serve(
-    home: Path = typer.Option(Path("."), help="분석 결과(<이름>_sequenceguider/)와 연습 기록을 두는 폴더"),
+    home: Path = typer.Option(Path("."), help="분석 결과(<이름>_sequenceguider/)와 계정·연습 기록을 두는 폴더"),
     port: int = typer.Option(8765, help="포트"),
-    host: str = typer.Option("127.0.0.1", help="접속 주소. 다른 기기에서 열려면 0.0.0.0 (같은 네트워크에서 누구나 열 수 있음)"),
+    host: str = typer.Option("127.0.0.1", help="접속 주소. 같은 와이파이의 휴대폰·다른 PC에서 열려면 0.0.0.0"),
+    signup: bool = typer.Option(True, "--signup/--no-signup",
+                                help="새 가입 받기. 끄면 첫 계정(관리자)만 만들 수 있고, 나머지는 `users add`로"),
     open_browser: bool = typer.Option(True, "--open/--no-open", help="브라우저 자동으로 열기"),
 ) -> None:
-    """웹 화면: 분석한 영상으로 배우고, 연습 기록을 남기고, 새 영상을 분석."""
+    """웹 화면: 로그인해서 분석한 영상으로 배우고, 연습 기록을 남기고, 새 영상을 분석."""
+    import socket
     import webbrowser
 
     from sequenceguider.web import make_server
 
-    server = make_server(home, host, port)
-    url = f"http://{'127.0.0.1' if host == '0.0.0.0' else host}:{port}/"
+    server = make_server(home, host, port, signup_open=signup)
+    url = f"http://{'127.0.0.1' if host == '0.0.0.0' else host}:{server.server_address[1]}/"
     typer.echo(f"SequenceGuider 웹: {url}  (폴더: {home.resolve()}, 끄려면 Ctrl+C)")
+    if host == "0.0.0.0":
+        try:
+            ip = socket.gethostbyname(socket.gethostname())
+            typer.echo(f"같은 네트워크의 다른 기기에서: http://{ip}:{server.server_address[1]}/")
+        except OSError:
+            pass
+    if server.app.accounts.count() == 0:
+        typer.echo("처음이면 화면에서 계정을 만드세요. 첫 계정이 관리자가 됩니다.")
     if open_browser:
         webbrowser.open(url)
     try:
@@ -498,6 +509,41 @@ def serve(
         pass
     finally:
         server.server_close()
+
+
+@app.command()
+def users(
+    action: str = typer.Argument("list", help="list | add | password | admin | member"),
+    username: str = typer.Argument("", help="아이디 (list 말고는 필요)"),
+    home: Path = typer.Option(Path("."), help="`serve --home`과 같은 폴더"),
+) -> None:
+    """웹 계정 관리: 목록, 추가, 비밀번호 바꾸기, 관리자 지정/해제."""
+    from sequenceguider.accounts import Accounts
+    from sequenceguider.web import App
+
+    accounts = Accounts(home.resolve() / "records.db")
+    try:
+        if action == "list":
+            for u in accounts.users():
+                typer.echo(f"{u.username}	{u.display_name}	{'관리자' if u.is_admin else '멤버'}	{u.created_at}")
+            return
+        if not username:
+            raise ValueError("아이디를 적어 주세요")
+        if action == "add":
+            password = typer.prompt("비밀번호", hide_input=True, confirmation_prompt=True)
+            u = App(home).sign_up(username, password)
+            typer.echo(f"만들었어요: {u.username} ({'관리자' if u.is_admin else '멤버'})")
+        elif action == "password":
+            accounts.set_password(username, typer.prompt("새 비밀번호", hide_input=True, confirmation_prompt=True))
+            typer.echo("바꿨어요. 그 계정은 모든 기기에서 로그아웃됩니다.")
+        elif action in ("admin", "member"):
+            accounts.set_admin(username, action == "admin")
+            typer.echo(f"{username}: {'관리자' if action == 'admin' else '멤버'}")
+        else:
+            raise ValueError(f"모르는 작업: {action}")
+    except ValueError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":

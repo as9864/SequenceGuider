@@ -4,12 +4,15 @@ Everything lives in one home folder:
     <home>/<name>_sequenceguider/   one lesson each (what `analyze` and/or `notes` write)
         media.json                  more videos/recordings on the same lesson (e.g. the final demo)
         media/<id>/                 what `notes`/`analyze` wrote for one of them, if it was analysed
-    <home>/records.db               checklist ticks and practice sessions (records.py)
+    <home>/records.db               accounts and logins (accounts.py), each user's checklist
+                                    ticks and practice sessions (records.py)
     <home>/.jobs/<id>.log           output of analyses started from the web page
 
-Standard library only (http.server + sqlite3). It binds to 127.0.0.1 by
-default: it runs analyses and serves local files, so it is not meant to be
-reachable from other machines.
+Standard library only (http.server + sqlite3). Every page but the app shell
+and the sign-up/log-in API needs a login (a cookie). The library is shared by
+everyone with an account; records are each user's own. Only admins can start
+analyses or add media, since those read video files on this computer and
+spend its CPU (and the Claude API key, for notes).
 """
 
 import json
@@ -23,13 +26,16 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from http import HTTPStatus
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
+from sequenceguider.accounts import SESSION_DAYS, Accounts, User
 from sequenceguider.records import Records
 
 APP_HTML = Path(__file__).parent / "web" / "app.html"
+COOKIE = "sg_session"
 _RANGE = re.compile(r"bytes=(\d*)-(\d*)$")
 VIDEO_EXTS = {".mp4", ".m4v", ".mov", ".webm", ".mkv", ".ogv"}
 AUDIO_EXTS = {".m4a", ".mp3", ".wav", ".aac", ".ogg", ".oga", ".opus", ".flac", ".weba"}
@@ -209,14 +215,15 @@ class Jobs:
         return job
 
     def _refresh(self, job: Job) -> None:
+        finished = job._proc is not None and job._proc.poll() is not None  # before the read: then the log is whole
         try:
             raw = (self.dir / f"{job.id}.log").read_bytes().decode("utf-8", "replace")
         except OSError:
             raw = ""
         # progress bars redraw with \r: keep the last state of each line
-        lines = [ln.split("\r")[-1] for ln in raw.split("\n")]
+        lines = [ln.split("\r")[-1] for ln in raw.replace("\r\n", "\n").split("\n")]  # Windows ends lines in \r\n
         job.log = "\n".join(ln for ln in lines if ln.strip())[-4000:]
-        if job.status == "running" and job._proc is not None and job._proc.poll() is not None:
+        if job.status == "running" and finished:
             job.status = "done" if job._proc.returncode == 0 else "failed"
             if job.lesson is None and (m := re.search(r"(?:리포트|노트): (.+)", raw)):
                 job.lesson = Path(m.group(1).strip()).parent.name
@@ -232,11 +239,18 @@ class Jobs:
 
 
 class App:
-    def __init__(self, home: Path):
+    def __init__(self, home: Path, signup_open: bool = True):
         self.home = home.resolve()
         self.home.mkdir(parents=True, exist_ok=True)
         self.records = Records(self.home / "records.db")
+        self.accounts = Accounts(self.home / "records.db", signup_open)
         self.jobs = Jobs(self.home)
+
+    def sign_up(self, username: str, password: str, display_name: str = "") -> User:
+        user = self.accounts.sign_up(username, password, display_name)
+        if user.is_admin and len(self.accounts.users()) == 1:
+            self.records.claim_unowned(user.id)  # the practice log kept before there were accounts
+        return user
 
     def lesson_file(self, lesson: str, rel: str) -> Path | None:
         base = (self.home / lesson).resolve()
@@ -351,22 +365,43 @@ def make_handler(app: App):
 
         # -- helpers ------------------------------------------------------
 
-        def _json(self, data, status: int = 200) -> None:
+        def _json(self, data, status: int = 200, cookie: str | None = None) -> None:
             body = json.dumps(data, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
+            if cookie is not None:
+                self.send_header("Set-Cookie", cookie)
             self.end_headers()
             self.wfile.write(body)
 
         def _error(self, status: int, message: str) -> None:
             self._json({"error": message}, status)
 
+        def _token(self) -> str | None:
+            try:
+                morsel = SimpleCookie(self.headers.get("Cookie") or "").get(COOKIE)
+            except CookieError:
+                return None
+            return morsel.value if morsel else None
+
+        @staticmethod
+        def _cookie(token: str, max_age: int) -> str:
+            # HttpOnly: page scripts can't read it; SameSite=Lax: other sites can't post with it
+            return f"{COOKIE}={token}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Lax"
+
+        def _same_origin(self) -> bool:
+            """A browser sends Origin on POST/PUT/DELETE; it must be this server (no cross-site requests)."""
+            origin = self.headers.get("Origin")
+            return origin is None or urlparse(origin).netloc == self.headers.get("Host")
+
         def _body(self) -> dict:
             n = int(self.headers.get("Content-Length") or 0)
             if not n:
                 return {}
+            if n > 1 << 20:
+                raise ValueError("요청이 너무 큽니다")
             data = json.loads(self.rfile.read(n).decode("utf-8"))
             if not isinstance(data, dict):
                 raise ValueError("JSON 객체가 필요합니다")
@@ -412,8 +447,17 @@ def make_handler(app: App):
         def _route(self, method: str) -> None:
             path = unquote(urlparse(self.path).path)
             try:
+                if method != "GET" and not self._same_origin():
+                    return self._error(403, "다른 사이트에서 온 요청은 받지 않아요")
                 if method == "GET" and path in ("/", "/index.html"):
-                    return self._file(APP_HTML)
+                    return self._file(APP_HTML)  # the shell is public: it shows the log-in screen itself
+                if path.startswith("/api/auth/"):
+                    return self._auth(method, path[len("/api/auth/"):])
+                user = app.accounts.user_for(self._token())
+                if user is None:
+                    return self._error(401, "로그인이 필요해요")
+                if not user.is_admin and method != "GET" and path.startswith(("/api/jobs", "/api/lessons/")):
+                    return self._error(403, "분석을 시작하거나 영상을 추가·삭제하는 건 관리자만 할 수 있어요")
                 if method == "GET" and (m := re.fullmatch(r"/lessons/([^/]+)/notes-video", path)):
                     f = app.notes_video(m.group(1))
                     return self._file(f) if f else self._error(404, "영상 파일을 찾지 못했습니다")
@@ -427,26 +471,26 @@ def make_handler(app: App):
                 if path == "/api/lessons" and method == "GET":
                     return self._json(find_lessons(app.home))
                 if path == "/api/checks" and method == "GET":
-                    return self._json(app.records.checks())
+                    return self._json(app.records.checks(user.id))
                 if path == "/api/checks" and method == "PUT":
                     b = self._body()
-                    app.records.set_check(str(b["item_id"]), bool(b.get("checked")), b.get("lesson"))
-                    return self._json(app.records.checks())
+                    app.records.set_check(user.id, str(b["item_id"]), bool(b.get("checked")), b.get("lesson"))
+                    return self._json(app.records.checks(user.id))
                 if path == "/api/sessions" and method == "GET":
-                    return self._json([asdict(s) for s in app.records.sessions()])
+                    return self._json([asdict(s) for s in app.records.sessions(user.id)])
                 if path == "/api/sessions" and method == "POST":
                     b = self._body()
-                    s = app.records.add_session(day=b.get("day"), minutes=int(b.get("minutes") or 0),
+                    s = app.records.add_session(user.id, day=b.get("day"), minutes=int(b.get("minutes") or 0),
                                                 figures=[str(x) for x in b.get("figures", [])],
                                                 note=str(b.get("note", "")), lesson=b.get("lesson"))
                     return self._json(asdict(s), 201)
                 if (m := re.fullmatch(r"/api/sessions/(\d+)", path)) and method == "DELETE":
-                    ok = app.records.delete_session(int(m.group(1)))
+                    ok = app.records.delete_session(user.id, int(m.group(1)))
                     return self._json({"deleted": ok}, 200 if ok else 404)
                 if path == "/api/export" and method == "GET":
-                    return self._json(app.records.export())
-                if path == "/api/jobs" and method == "GET":
-                    return self._json(app.jobs.list())
+                    return self._json(app.records.export(user.id))
+                if path == "/api/jobs" and method == "GET":  # sources are paths on this computer: admins only
+                    return self._json(app.jobs.list() if user.is_admin else [])
                 if (m := re.fullmatch(r"/api/lessons/([^/]+)/media", path)) and method == "POST":
                     b = self._body()
                     item = app.add_media(m.group(1), str(b.get("source", "")), str(b.get("title", "")),
@@ -469,8 +513,32 @@ def make_handler(app: App):
                                          str(b.get("kind", "analyze")), str(b.get("speakers", "")))
                     return self._json({"id": job.id}, 201)
                 return self._error(404, "없는 주소입니다")
+            except PermissionError as e:
+                return self._error(403, str(e))
             except (ValueError, KeyError, json.JSONDecodeError) as e:
                 return self._error(400, str(e))
+
+        def _auth(self, method: str, action: str) -> None:
+            if action == "me" and method == "GET":
+                user = app.accounts.user_for(self._token())
+                info = {"user": user.public() if user else None, "can_sign_up": app.accounts.can_sign_up(),
+                        "first_account": app.accounts.count() == 0}
+                return self._json(info, 200 if user else 401)
+            if action == "signup" and method == "POST":
+                b = self._body()
+                user = app.sign_up(str(b.get("username", "")), str(b.get("password", "")),
+                                   str(b.get("display_name", "")))
+                token = app.accounts.start_session(user.id)
+                return self._json({"user": user.public()}, 201, self._cookie(token, SESSION_DAYS * 86400))
+            if action == "login" and method == "POST":
+                b = self._body()
+                user, token = app.accounts.log_in(str(b.get("username", "")), str(b.get("password", "")),
+                                                  self.client_address[0])
+                return self._json({"user": user.public()}, 200, self._cookie(token, SESSION_DAYS * 86400))
+            if action == "logout" and method == "POST":
+                app.accounts.log_out(self._token())
+                return self._json({"ok": True}, 200, self._cookie("", 0))
+            return self._error(404, "없는 주소입니다")
 
         def do_GET(self):
             self._route("GET")
@@ -487,5 +555,8 @@ def make_handler(app: App):
     return Handler
 
 
-def make_server(home: Path, host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), make_handler(App(home)))
+def make_server(home: Path, host: str = "127.0.0.1", port: int = 8765, signup_open: bool = True) -> ThreadingHTTPServer:
+    app = App(home, signup_open)
+    server = ThreadingHTTPServer((host, port), make_handler(app))
+    server.app = app
+    return server

@@ -129,7 +129,28 @@ uv run sequenceguider serve --home ~/tango   # 분석 결과와 기록을 둘 �
   유튜브 링크로 만든 노트는 유튜브 플레이어로 재생합니다. **＋ 새 영상 분석**에서 "레슨 노트"를 골라 웹에서 바로 만들 수도 있습니다
 - **기록**: 최근 7일 연습 시간, 연속 연습 일수, 날짜별 연습 달력, 피구라별 진도(여러 영상에 걸쳐 합산), 연습 일지. JSON으로 내보낼 수 있습니다
 - 기록은 홈 폴더의 `records.db`(SQLite) 한 파일에 저장됩니다. 체크 항목은 피구라 기준이라 같은 피구라가 나오는 다른 영상에서도 이어집니다
-- 기본으로 이 컴퓨터(127.0.0.1)에서만 열립니다. 휴대폰에서 열려면 `--host 0.0.0.0` (같은 네트워크의 누구나 열 수 있으니 집에서만)
+- 기본으로 이 컴퓨터(127.0.0.1)에서만 열립니다. 휴대폰에서 열려면 `--host 0.0.0.0` (아래 "여러 사람이 쓰기" 참고)
+
+#### 여러 사람이 쓰기 (계정·로그인)
+
+웹 화면은 로그인해야 쓸 수 있습니다. 처음 열면 계정 만들기 화면이 나오고, **첫 계정이 관리자**가 됩니다.
+
+- **관리자**: 새 레슨 분석, 영상·녹음 추가/빼기, 분석 작업 보기. (이 컴퓨터의 파일을 읽고 CPU와 Claude API 키를 쓰는 일이라 관리자만)
+- **멤버**: 레슨 라이브러리는 모두 같이 보고, 체크리스트·연습 일지는 **각자 따로** 저장됩니다
+- 계정이 생기기 전에 쌓인 연습 기록은 첫 계정(관리자)의 것이 됩니다
+- 비밀번호는 scrypt 해시로만 저장되고, 로그인은 30일 유지되는 쿠키(HttpOnly, SameSite=Lax)입니다. 같은 아이디로 15분에 10번 틀리면 잠깁니다
+
+```bash
+uv run sequenceguider serve --home ~/tango --host 0.0.0.0   # 같은 와이파이의 휴대폰·다른 PC에서 접속 (주소가 출력됩니다)
+uv run sequenceguider serve --home ~/tango --no-signup      # 새 가입 막기 (계정은 아래 users add로)
+uv run sequenceguider users list --home ~/tango             # 계정 목록
+uv run sequenceguider users add 친구아이디 --home ~/tango    # 계정 만들기 (비밀번호를 물어봅니다)
+uv run sequenceguider users password 아이디 --home ~/tango  # 비밀번호 바꾸기 (모든 기기에서 로그아웃)
+uv run sequenceguider users admin 아이디 --home ~/tango     # 관리자로 (member 로 되돌리기)
+```
+
+- `--host 0.0.0.0`으로 처음 켜면 Windows 방화벽이 허용할지 묻습니다. **개인 네트워크**만 허용하세요
+- http(암호화 없음)라 집·연습실 같은 믿을 수 있는 네트워크에서만 쓰세요. 인터넷에 공개하려면 HTTPS(터널이나 리버스 프록시)를 앞에 두는 게 먼저입니다
 
 ### 옵션
 
@@ -237,4 +258,5 @@ uv run pytest -q     # 합성 스켈레톤 기반 테스트 (모델·영상 불�
 | `notes.py` | `notes`: 받아쓰기(faster-whisper), 번역·핵심 정리(Claude API), 자막·노트 파일 |
 | `speakers.py` | `notes --speakers`: 말소리 구간의 언어·목소리 지문(WeSpeaker ONNX)·높이로 누가 언제 말하는지 |
 | `web.py`, `web/app.html` | `serve` 웹 화면: 레슨 목록, 분석·노트 작업, 노트 화면, 기록 화면 |
-| `records.py` | 연습 기록 (체크리스트, 연습 일지) SQLite 저장 |
+| `records.py` | 연습 기록 (체크리스트, 연습 일지) 사용자별 SQLite 저장 |
+| `accounts.py` | 웹 계정: 가입, 로그인(scrypt 비밀번호, 쿠키 세션), 관리자/멤버 |

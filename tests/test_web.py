@@ -21,23 +21,46 @@ LIB = FigureLibrary.load()
 class TestRecords:
     def test_checks_roundtrip(self, tmp_path):
         r = Records(tmp_path / "r.db")
-        r.set_check("ocho_atras.drill.0", True, "lesson1")
-        r.set_check("ocho_atras.drill.0", True)  # ticking twice keeps the first time
-        assert list(r.checks()) == ["ocho_atras.drill.0"]
-        r.set_check("ocho_atras.drill.0", False)
-        assert r.checks() == {}
+        r.set_check(1, "ocho_atras.drill.0", True, "lesson1")
+        r.set_check(1, "ocho_atras.drill.0", True)  # ticking twice keeps the first time
+        assert list(r.checks(1)) == ["ocho_atras.drill.0"]
+        assert r.checks(2) == {}  # each user's own
+        r.set_check(1, "ocho_atras.drill.0", False)
+        assert r.checks(1) == {}
 
     def test_sessions(self, tmp_path):
         r = Records(tmp_path / "r.db")
-        a = r.add_session(day="2026-09-28", minutes=45, figures=["giro"], note=" 히로 크기 ")
-        b = r.add_session(day="2026-09-30", minutes=20, figures=["ocho_atras", "giro"], lesson="l1")
+        a = r.add_session(1, day="2026-09-28", minutes=45, figures=["giro"], note=" 히로 크기 ")
+        b = r.add_session(1, day="2026-09-30", minutes=20, figures=["ocho_atras", "giro"], lesson="l1")
         assert a.note == "히로 크기"
-        assert [s.id for s in r.sessions()] == [b.id, a.id]  # newest day first
-        assert r.delete_session(a.id) and not r.delete_session(a.id)
+        assert [s.id for s in r.sessions(1)] == [b.id, a.id]  # newest day first
+        assert r.sessions(2) == [] and not r.delete_session(2, a.id)  # not someone else's
+        assert r.delete_session(1, a.id) and not r.delete_session(1, a.id)
         with pytest.raises(ValueError):
-            r.add_session(day="2026-13-01", minutes=10, figures=[])
+            r.add_session(1, day="2026-13-01", minutes=10, figures=[])
         with pytest.raises(ValueError):
-            r.add_session(day=None, minutes=0, figures=[])
+            r.add_session(1, day=None, minutes=0, figures=[])
+
+    def test_records_from_before_accounts(self, tmp_path):
+        """An old records.db (no users) keeps its log: the first account gets it."""
+        import sqlite3
+        db = sqlite3.connect(tmp_path / "records.db")
+        db.executescript("""
+            CREATE TABLE checks (item_id TEXT PRIMARY KEY, lesson TEXT, checked_at TEXT NOT NULL);
+            CREATE TABLE sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, lesson TEXT, day TEXT NOT NULL,
+                minutes INTEGER NOT NULL, figures TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL);
+            INSERT INTO checks VALUES ('giro.drill.0', NULL, '2026-10-01T10:00:00');
+            INSERT INTO sessions (day, minutes, figures, created_at) VALUES ('2026-10-01', 30, '[]', 'x');
+        """)
+        db.close()
+        from sequenceguider.web import App
+        app = App(tmp_path)
+        owner = app.sign_up("owner", "password123")
+        assert owner.is_admin and list(app.records.checks(owner.id)) == ["giro.drill.0"]
+        assert [s.minutes for s in app.records.sessions(owner.id)] == [30]
+        second = app.sign_up("second", "password123")
+        assert not second.is_admin and app.records.checks(second.id) == {}
 
 
 @pytest.fixture
@@ -52,17 +75,37 @@ def home(tmp_path):
     return tmp_path
 
 
+_COOKIES: dict[str, str] = {}  # base url -> the admin's login cookie, sent by `call`
+
+
+def login_cookie(headers) -> str:
+    return headers["Set-Cookie"].split(";")[0]
+
+
+def log_in_admin(base: str) -> None:
+    """Make the server's first account; `call` then sends its cookie."""
+    status, headers, _ = call(base, "/api/auth/signup", "POST", {"username": "admin", "password": "password123"},
+                              auth=False)
+    assert status == 201
+    _COOKIES[base] = login_cookie(headers)
+
+
 @pytest.fixture
 def server(home):
     srv = make_server(home, port=0)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    yield f"http://127.0.0.1:{srv.server_address[1]}"
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    log_in_admin(base)
+    yield base
     srv.shutdown()
     srv.server_close()
 
 
-def call(base, path, method="GET", body=None, headers=None):
-    req = urllib.request.Request(base + path, method=method, headers=headers or {},
+def call(base, path, method="GET", body=None, headers=None, auth=True):
+    headers = dict(headers or {})
+    if auth and base in _COOKIES:
+        headers.setdefault("Cookie", _COOKIES[base])
+    req = urllib.request.Request(base + path, method=method, headers=headers,
                                  data=json.dumps(body).encode() if body is not None else None)
     try:
         with urllib.request.urlopen(req) as res:
@@ -185,7 +228,7 @@ def test_media_analysis_goes_to_its_own_folder(tmp_path):
     rec = tmp_path / "talk.m4a"
     rec.write_bytes(b"")
     app = App(tmp_path)
-    app.jobs.command = [sys.executable, "-c", "import sys; print(sys.argv[1:]); print('노트: x/notes.json')"]
+    app.jobs.command = [sys.executable, "-c", "import sys; print(' '.join(sys.argv[1:])); print('노트: x/notes.json')"]
     item = app.add_media("l_sequenceguider", str(rec), "", "none")
     job = app.analyze_media("l_sequenceguider", item["id"], "notes", speakers="A=남/en")
     for _ in range(100):
@@ -202,3 +245,99 @@ def test_media_analysis_goes_to_its_own_folder(tmp_path):
     (out / "notes.json").write_text(json.dumps({"duration_s": 60, "practice": [{"id": "p1", "text": "축"}]}), "utf-8")
     (m,) = find_lessons(tmp_path)[0]["media"]
     assert m["has_notes"] and m["checklist"] == [{"id": "p1", "text": "축"}]
+
+
+class TestAccounts:
+    def test_passwords_are_hashed(self):
+        from sequenceguider.accounts import hash_password, verify_password
+        h = hash_password("비밀번호1234")
+        assert "비밀번호" not in h and verify_password("비밀번호1234", h) and not verify_password("x", h)
+        assert hash_password("same") != hash_password("same")  # salted
+
+    def test_sign_up_rules(self, tmp_path):
+        from sequenceguider.accounts import Accounts
+        acc = Accounts(tmp_path / "r.db", signup_open=False)
+        assert acc.can_sign_up()  # the first account, even with sign-up closed
+        assert acc.sign_up("Han", "password123").is_admin
+        assert not acc.can_sign_up()
+        with pytest.raises(PermissionError):
+            acc.sign_up("other", "password123")
+        acc.signup_open = True
+        for name, pw, msg in [("han", "password123", "이미 있는"), ("a", "password123", "아이디는"),
+                              ("ok_name", "short", "8자")]:
+            with pytest.raises(ValueError, match=msg):
+                acc.sign_up(name, pw)
+        assert not acc.sign_up("second", "password123").is_admin
+
+    def test_login_and_logout(self, tmp_path):
+        from sequenceguider.accounts import Accounts
+        acc = Accounts(tmp_path / "r.db")
+        acc.sign_up("han", "password123", "한승엽")
+        with pytest.raises(ValueError):
+            acc.log_in("han", "wrong")
+        user, token = acc.log_in("HAN", "password123")  # names ignore case
+        assert user.display_name == "한승엽" and acc.user_for(token).id == user.id
+        assert acc.user_for("made-up") is None
+        acc.log_out(token)
+        assert acc.user_for(token) is None
+        _, token = acc.log_in("han", "password123")
+        acc.set_password("han", "newpassword1")  # logs out everywhere
+        assert acc.user_for(token) is None
+
+    def test_too_many_wrong_passwords(self, tmp_path):
+        from sequenceguider.accounts import Accounts
+        acc = Accounts(tmp_path / "r.db")
+        acc.sign_up("han", "password123")
+        for _ in range(10):
+            with pytest.raises(ValueError):
+                acc.log_in("han", "wrong", "1.2.3.4")
+        with pytest.raises(PermissionError):
+            acc.log_in("han", "password123", "1.2.3.4")
+        assert acc.log_in("han", "password123", "5.6.7.8")  # another address isn't locked
+
+
+class TestWebAuth:
+    def test_everything_but_the_shell_needs_login(self, server):
+        assert call(server, "/", auth=False)[0] == 200
+        for path in ["/api/lessons", "/api/checks", "/api/sessions", "/api/jobs",
+                     "/lessons/lesson1_sequenceguider/index.html"]:
+            assert call(server, path, auth=False)[0] == 401, path
+        status, _, body = call(server, "/api/auth/me", auth=False)
+        assert status == 401 and json.loads(body)["user"] is None and not json.loads(body)["first_account"]
+        assert json.loads(call(server, "/api/auth/me")[2])["user"]["is_admin"]
+
+    def test_members_keep_their_own_records(self, server):
+        status, headers, body = call(server, "/api/auth/signup", "POST",
+                                     {"username": "member", "password": "password123", "display_name": "회원"},
+                                     auth=False)
+        assert status == 201 and not json.loads(body)["user"]["is_admin"]
+        member = {"Cookie": login_cookie(headers)}
+        call(server, "/api/checks", "PUT", {"item_id": "giro.drill.0", "checked": True})  # the admin's tick
+        assert call(server, "/api/checks", headers=member)[2] == b"{}"
+        status, _, body = call(server, "/api/sessions", "POST", {"minutes": 20, "figures": []}, headers=member)
+        sid = json.loads(body)["id"]
+        assert json.loads(call(server, "/api/sessions")[2]) == []  # the admin doesn't see it
+        assert call(server, f"/api/sessions/{sid}", "DELETE")[0] == 404  # nor delete it
+        assert call(server, "/api/lessons", headers=member)[0] == 200  # the library is shared
+        # analysing / adding media reads files on the server: admins only
+        assert call(server, "/api/jobs", headers=member)[2] == b"[]"
+        assert call(server, "/api/jobs", "POST", {"source": "https://youtu.be/x"}, headers=member)[0] == 403
+        assert call(server, "/api/lessons/lesson1_sequenceguider/media", "POST", {"source": "C:/x.mp4"},
+                    headers=member)[0] == 403
+
+    def test_login_logout_cookie(self, server):
+        status, headers, _ = call(server, "/api/auth/login", "POST", {"username": "admin", "password": "nope"},
+                                  auth=False)
+        assert status == 400 and "Set-Cookie" not in headers
+        status, headers, _ = call(server, "/api/auth/login", "POST",
+                                  {"username": "admin", "password": "password123"}, auth=False)
+        assert status == 200 and "HttpOnly" in headers["Set-Cookie"] and "SameSite=Lax" in headers["Set-Cookie"]
+        cookie = {"Cookie": login_cookie(headers)}
+        assert call(server, "/api/lessons", headers=cookie)[0] == 200
+        call(server, "/api/auth/logout", "POST", headers=cookie)
+        assert call(server, "/api/lessons", headers=cookie)[0] == 401
+
+    def test_no_cross_site_writes(self, server):
+        body = {"minutes": 20, "figures": []}
+        assert call(server, "/api/sessions", "POST", body, headers={"Origin": "https://evil.example"})[0] == 403
+        assert call(server, "/api/sessions", "POST", body, headers={"Origin": server})[0] == 201

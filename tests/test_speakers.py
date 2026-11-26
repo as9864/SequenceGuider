@@ -12,7 +12,7 @@ import sequenceguider.notes as N
 import sequenceguider.speakers as S
 from sequenceguider.cli import app
 from sequenceguider.web import Jobs, make_server
-from tests.test_web import call
+from tests.test_web import call, log_in_admin
 
 SPEC = "남자 강사=남/en, 여자 강사=여/en, 통역=남/ko"
 SR = S.SR
@@ -200,6 +200,7 @@ def test_audio_served_to_the_player(tmp_path):
     (lesson / "notes.json").write_text(json.dumps({"title": "t", "video": str(rec), "media": "audio"}), encoding="utf-8")
     srv = make_server(home, port=0)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
+    log_in_admin(f"http://127.0.0.1:{srv.server_address[1]}")
     try:
         status, headers, body = call(f"http://127.0.0.1:{srv.server_address[1]}", "/lessons/w_sequenceguider/notes-video",
                                      headers={"Range": "bytes=0-3"})
