@@ -480,8 +480,15 @@ def serve(
     home: Path = typer.Option(Path("."), help="분석 결과(<이름>_sequenceguider/)와 계정·연습 기록을 두는 폴더"),
     port: int = typer.Option(8765, help="포트"),
     host: str = typer.Option("127.0.0.1", help="접속 주소. 같은 와이파이의 휴대폰·다른 PC에서 열려면 0.0.0.0"),
-    signup: bool = typer.Option(True, "--signup/--no-signup",
-                                help="새 가입 받기. 끄면 첫 계정(관리자)만 만들 수 있고, 나머지는 `users add`로"),
+    signup: str = typer.Option("open", help="가입 방식: open(누구나) · invite(초대 코드가 있어야, 인터넷에 열 때) · "
+                                            "closed(관리자가 `users add`로만)"),
+    max_jobs: int = typer.Option(1, help="분석을 동시에 몇 개까지 돌릴지. 나머지는 차례를 기다립니다"),
+    monthly_limit: int = typer.Option(4, help="회원 한 명이 한 달에 시작할 수 있는 분석 수 (0: 제한 없음, 관리자는 늘 없음)"),
+    max_upload_mb: int = typer.Option(4096, help="업로드 한 개의 최대 크기 (MB)"),
+    behind_proxy: bool = typer.Option(False, "--behind-proxy",
+                                      help="Cloudflare Tunnel(cloudflared)이나 Caddy가 이 PC에서 요청을 넘겨줄 때. "
+                                           "방문자의 실제 주소와 https 여부를 그 헤더에서 읽습니다"),
+    public_url: str = typer.Option("", help="사람들이 접속하는 주소 (예: https://tango.example.com)"),
     open_browser: bool = typer.Option(True, "--open/--no-open", help="브라우저 자동으로 열기"),
 ) -> None:
     """웹 화면: 로그인해서 분석한 영상으로 배우고, 연습 기록을 남기고, 새 영상을 분석."""
@@ -490,7 +497,12 @@ def serve(
 
     from sequenceguider.web import make_server
 
-    server = make_server(home, host, port, signup_open=signup)
+    try:
+        server = make_server(home, host, port, signup=signup, max_jobs=max_jobs, trust_proxy=behind_proxy,
+                             public_url=public_url, monthly_limit=monthly_limit, max_upload_mb=max_upload_mb)
+    except ValueError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1)
     url = f"http://{'127.0.0.1' if host == '0.0.0.0' else host}:{server.server_address[1]}/"
     typer.echo(f"SequenceGuider 웹: {url}  (폴더: {home.resolve()}, 끄려면 Ctrl+C)")
     if host == "0.0.0.0":
@@ -499,8 +511,12 @@ def serve(
             typer.echo(f"같은 네트워크의 다른 기기에서: http://{ip}:{server.server_address[1]}/")
         except OSError:
             pass
+    if public_url:
+        typer.echo(f"공개 주소: {public_url}")
     if server.app.accounts.count() == 0:
         typer.echo("처음이면 화면에서 계정을 만드세요. 첫 계정이 관리자가 됩니다.")
+    elif signup == "invite":
+        typer.echo("초대 코드로만 가입할 수 있어요. 코드 만들기: sequenceguider users invite --home " + str(home))
     if open_browser:
         webbrowser.open(url)
     try:
@@ -513,12 +529,13 @@ def serve(
 
 @app.command()
 def users(
-    action: str = typer.Argument("list", help="list | add | password | admin | member"),
-    username: str = typer.Argument("", help="아이디 (list 말고는 필요)"),
+    action: str = typer.Argument("list", help="list | add | password | admin | member | delete | invite"),
+    username: str = typer.Argument("", help="아이디 (list, invite 말고는 필요). invite에는 메모(누구에게 줄지)"),
     home: Path = typer.Option(Path("."), help="`serve --home`과 같은 폴더"),
+    count: int = typer.Option(1, "--count", "-n", help="invite: 만들 코드 수"),
 ) -> None:
-    """웹 계정 관리: 목록, 추가, 비밀번호 바꾸기, 관리자 지정/해제."""
-    from sequenceguider.accounts import Accounts
+    """웹 계정 관리: 목록, 추가, 비밀번호 바꾸기, 관리자 지정/해제, 삭제, 초대 코드 만들기."""
+    from sequenceguider.accounts import INVITE_DAYS, Accounts
     from sequenceguider.web import App
 
     accounts = Accounts(home.resolve() / "records.db")
@@ -527,23 +544,59 @@ def users(
             for u in accounts.users():
                 typer.echo(f"{u.username}	{u.display_name}	{'관리자' if u.is_admin else '멤버'}	{u.created_at}")
             return
+        if action == "invite":  # one-time codes for `serve --signup invite`; shown only now
+            for _ in range(max(1, count)):
+                typer.echo(accounts.create_invite(note=username))
+            typer.echo(f"코드 하나로 한 명이 가입할 수 있어요 ({INVITE_DAYS}일 안에).",
+                       err=True)
+            return
         if not username:
             raise ValueError("아이디를 적어 주세요")
         if action == "add":
             password = typer.prompt("비밀번호", hide_input=True, confirmation_prompt=True)
-            u = App(home).sign_up(username, password)
+            u = App(home).sign_up(username, password, by_admin=True)
             typer.echo(f"만들었어요: {u.username} ({'관리자' if u.is_admin else '멤버'})")
         elif action == "password":
             accounts.set_password(username, typer.prompt("새 비밀번호", hide_input=True, confirmation_prompt=True))
             typer.echo("바꿨어요. 그 계정은 모든 기기에서 로그아웃됩니다.")
+        elif action == "delete":
+            user = accounts.get(username)
+            if user is None:
+                raise ValueError("없는 아이디예요")
+            typer.confirm(f"{username} 계정과 연습 기록을 모두 지울까요?", abort=True)
+            App(home).delete_account(user, None)
+            typer.echo("지웠어요.")
         elif action in ("admin", "member"):
             accounts.set_admin(username, action == "admin")
             typer.echo(f"{username}: {'관리자' if action == 'admin' else '멤버'}")
         else:
             raise ValueError(f"모르는 작업: {action}")
-    except ValueError as e:
+    except (ValueError, PermissionError) as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(1)
+
+
+@app.command()
+def backup(
+    home: Path = typer.Option(Path("."), help="`serve --home`과 같은 폴더"),
+    out: Path = typer.Option(None, help="백업을 둘 폴더 (기본: <home>/backups). 다른 디스크나 클라우드 동기화 폴더 권장"),
+    keep: int = typer.Option(14, help="최근 몇 개를 남길지. 오래된 것부터 지웁니다"),
+) -> None:
+    """계정·연습 기록 DB(records.db)를 백업. 서버가 켜져 있어도 안전합니다 (매일 예약해 두세요)."""
+    from datetime import datetime
+
+    from sequenceguider.db import backup as backup_db
+
+    src = home.resolve() / "records.db"
+    if not src.is_file():
+        typer.echo(f"DB가 없습니다: {src}", err=True)
+        raise typer.Exit(1)
+    folder = out or home.resolve() / "backups"
+    dest = backup_db(src, folder / f"records-{datetime.now():%Y%m%d-%H%M%S}.db")
+    old = sorted(folder.glob("records-*.db"))[:-keep] if keep > 0 else []
+    for f in old:
+        f.unlink()
+    typer.echo(f"백업: {dest}" + (f" (오래된 {len(old)}개 지움)" if old else ""))
 
 
 if __name__ == "__main__":

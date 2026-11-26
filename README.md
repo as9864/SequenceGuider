@@ -135,22 +135,29 @@ uv run sequenceguider serve --home ~/tango   # 분석 결과와 기록을 둘 �
 
 웹 화면은 로그인해야 쓸 수 있습니다. 처음 열면 계정 만들기 화면이 나오고, **첫 계정이 관리자**가 됩니다.
 
-- **관리자**: 새 레슨 분석, 영상·녹음 추가/빼기, 분석 작업 보기. (이 컴퓨터의 파일을 읽고 CPU와 Claude API 키를 쓰는 일이라 관리자만)
-- **멤버**: 레슨 라이브러리는 모두 같이 보고, 체크리스트·연습 일지는 **각자 따로** 저장됩니다
+- **각자의 라이브러리**: 레슨·노트·연습 기록은 사람마다 따로이고 다른 사람 것은 보이지 않습니다. 첫 계정(관리자)의 라이브러리는 홈 폴더 자체, 다른 사람은 `<home>/users/<번호>/` 입니다
+- **멤버**: 새 레슨에서 수업 영상·녹음을 **업로드**하면 노트(원래 언어 자막, 한국어 번역, 핵심 정리)가 만들어집니다. 레슨 언어는 자동·영어·스페인어·한국어 중에서 고를 수 있고, 한 달 분석 수는 `--monthly-limit`(기본 4)로 정합니다. 큰 파일은 32MB씩 나눠 올라가고 끊기면 이어서 올립니다
+- **관리자**: 위 기능에 더해 이 PC의 파일 경로나 유튜브 링크로 레슨을 만들 수 있고, 분석 수 제한이 없습니다
 - 계정이 생기기 전에 쌓인 연습 기록은 첫 계정(관리자)의 것이 됩니다
 - 비밀번호는 scrypt 해시로만 저장되고, 로그인은 30일 유지되는 쿠키(HttpOnly, SameSite=Lax)입니다. 같은 아이디로 15분에 10번 틀리면 잠깁니다
+- 분석은 작업 큐로 한 번에 하나씩(`--max-jobs`) 돌고, 나머지는 차례를 기다립니다. 서버를 다시 켜도 대기 중인 작업은 이어서 처리됩니다
+- 회원은 기록 > 계정에서 직접 탈퇴할 수 있고, 계정과 기록이 바로 지워집니다
 
 ```bash
 uv run sequenceguider serve --home ~/tango --host 0.0.0.0   # 같은 와이파이의 휴대폰·다른 PC에서 접속 (주소가 출력됩니다)
-uv run sequenceguider serve --home ~/tango --no-signup      # 새 가입 막기 (계정은 아래 users add로)
+uv run sequenceguider serve --home ~/tango --signup invite  # 초대 코드가 있어야 가입 (closed: 관리자가 users add로만)
+uv run sequenceguider users invite "동호회 3월" -n 5 --home ~/tango  # 일회용 초대 코드 5개 (14일 유효, 지금만 보여요)
 uv run sequenceguider users list --home ~/tango             # 계정 목록
 uv run sequenceguider users add 친구아이디 --home ~/tango    # 계정 만들기 (비밀번호를 물어봅니다)
 uv run sequenceguider users password 아이디 --home ~/tango  # 비밀번호 바꾸기 (모든 기기에서 로그아웃)
 uv run sequenceguider users admin 아이디 --home ~/tango     # 관리자로 (member 로 되돌리기)
+uv run sequenceguider users delete 아이디 --home ~/tango    # 계정과 그 기록 지우기
+uv run sequenceguider backup --home ~/tango                # 계정·기록 DB 백업 (서버가 켜져 있어도 안전)
 ```
 
 - `--host 0.0.0.0`으로 처음 켜면 Windows 방화벽이 허용할지 묻습니다. **개인 네트워크**만 허용하세요
-- http(암호화 없음)라 집·연습실 같은 믿을 수 있는 네트워크에서만 쓰세요. 인터넷에 공개하려면 HTTPS(터널이나 리버스 프록시)를 앞에 두는 게 먼저입니다
+- `--host 0.0.0.0`은 http(암호화 없음)라 집·연습실 같은 믿을 수 있는 네트워크에서만 쓰세요
+- **인터넷에 공개하기**: 이 PC에서 Cloudflare Tunnel로 HTTPS 주소를 붙이는 방법은 [docs/deploy-windows.md](docs/deploy-windows.md)에 있습니다 (`--behind-proxy --public-url https://… --signup invite`, 자동 시작, 매일 백업, 가동 감시 `/healthz`)
 
 ### 옵션
 

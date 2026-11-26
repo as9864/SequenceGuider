@@ -15,6 +15,8 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from pathlib import Path
 
+from sequenceguider.db import connect, enable_wal
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS checks (
     user_id    INTEGER,
@@ -72,15 +74,12 @@ def _migrate(db: sqlite3.Connection) -> None:
 class Records:
     def __init__(self, path: Path):
         self.path = path
-        path.parent.mkdir(parents=True, exist_ok=True)
+        enable_wal(path)
         with self._db() as db:
             _migrate(db)
 
     def _db(self) -> sqlite3.Connection:
-        # one connection per call: the web server handles requests on several threads
-        db = sqlite3.connect(self.path)
-        db.row_factory = sqlite3.Row
-        return db
+        return connect(self.path)
 
     def claim_unowned(self, user: int) -> None:
         """Give records from before accounts existed to `user` (the first account)."""
@@ -132,6 +131,12 @@ class Records:
         """Only the user's own sessions: someone else's id deletes nothing."""
         with self._db() as db:
             return db.execute("DELETE FROM sessions WHERE id = ? AND user_id = ?", (session_id, user)).rowcount > 0
+
+    def delete_user_data(self, user: int) -> None:
+        """Everything this user recorded: for an account that is being deleted."""
+        with self._db() as db:
+            db.execute("DELETE FROM checks WHERE user_id = ?", (user,))
+            db.execute("DELETE FROM sessions WHERE user_id = ?", (user,))
 
     def export(self, user: int) -> dict:
         return {"checks": self.checks(user), "sessions": [asdict(s) for s in self.sessions(user)]}
