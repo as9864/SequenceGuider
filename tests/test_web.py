@@ -128,3 +128,77 @@ def test_job_runs_analyze_and_finds_its_lesson(tmp_path):
     assert d["status"] == "done" and d["lesson"] == "out_sequenceguider"
     assert "포즈 100%" in d["log"] and "포즈 1%" not in d["log"]
     assert job.id == d["id"]
+
+
+class TestLessonMedia:
+    """One lesson, several videos/recordings: e.g. the class, then the final demo (not analysed)."""
+
+    def test_add_without_analysis_and_serve(self, server, home):
+        demo = home / "final_demo.mp4"
+        demo.write_bytes(b"0123456789" * 10)
+        status, _, body = call(server, "/api/lessons/lesson1_sequenceguider/media", "POST",
+                               {"source": str(demo), "title": "최종 시연", "analysis": "none"})
+        assert status == 201
+        item = json.loads(body)
+        assert item["title"] == "최종 시연" and item["media"] == "video" and item["analysis"] == "none"
+        (lesson,) = json.loads(call(server, "/api/lessons")[2])
+        assert [(m["id"], m["has_notes"], m["has_guide"]) for m in lesson["media"]] == [(item["id"], False, False)]
+        assert lesson["has_guide"]  # the lesson's own analysis is untouched
+        assert json.loads(call(server, "/api/jobs")[2]) == []  # nothing was analysed
+        status, headers, body = call(server, f"/lessons/lesson1_sequenceguider/media-file/{item['id']}",
+                                     headers={"Range": "bytes=0-9"})
+        assert status == 206 and body == b"0123456789"
+        assert call(server, "/api/lessons/lesson1_sequenceguider/media/nope", "DELETE")[0] == 404
+        assert call(server, f"/api/lessons/lesson1_sequenceguider/media/{item['id']}", "DELETE")[0] == 200
+        assert json.loads(call(server, "/api/lessons")[2])[0]["media"] == []
+        assert demo.is_file()  # taken off the lesson, not deleted
+
+    def test_add_rejects_bad_input(self, server, home):
+        (home / "notes.txt").write_text("x")
+        for body, msg in [({"source": "/no/such.mp4"}, "파일이 없습니다"),
+                          ({"source": str(home / "notes.txt")}, "영상·녹음 파일이 아닙니다")]:
+            status, _, out = call(server, "/api/lessons/lesson1_sequenceguider/media", "POST", body)
+            assert status == 400 and msg in json.loads(out)["error"]
+        rec = home / "talk.m4a"
+        rec.write_bytes(b"")
+        status, _, out = call(server, "/api/lessons/lesson1_sequenceguider/media", "POST",
+                              {"source": str(rec), "analysis": "analyze", "sequence": "오초"})
+        assert status == 400 and "동작 분석" in json.loads(out)["error"]
+        assert call(server, "/api/lessons/nope_sequenceguider/media", "POST", {"source": str(rec)})[0] == 400
+        assert json.loads(call(server, "/api/lessons")[2])[0]["media"] == []  # nothing half-added
+
+    def test_media_only_lesson(self, server, home):
+        rec = home / "audio" / "lesson2.m4a"
+        rec.parent.mkdir()
+        rec.write_bytes(b"")
+        status, _, body = call(server, "/api/jobs", "POST", {"kind": "none", "source": str(rec), "title": "2부"})
+        assert status == 201 and json.loads(body)["lesson"] == "lesson2_sequenceguider"
+        lesson = next(l for l in json.loads(call(server, "/api/lessons")[2]) if l["id"] == "lesson2_sequenceguider")
+        assert lesson["title"] == "2부" and not lesson["has_guide"] and lesson["notes"] is None
+        assert [m["media"] for m in lesson["media"]] == ["audio"]
+
+
+def test_media_analysis_goes_to_its_own_folder(tmp_path):
+    from sequenceguider.web import App
+
+    (tmp_path / "l_sequenceguider").mkdir()
+    rec = tmp_path / "talk.m4a"
+    rec.write_bytes(b"")
+    app = App(tmp_path)
+    app.jobs.command = [sys.executable, "-c", "import sys; print(sys.argv[1:]); print('노트: x/notes.json')"]
+    item = app.add_media("l_sequenceguider", str(rec), "", "none")
+    job = app.analyze_media("l_sequenceguider", item["id"], "notes", speakers="A=남/en")
+    for _ in range(100):
+        (d,) = app.jobs.list()
+        if d["status"] != "running":
+            break
+        time.sleep(0.05)
+    out = tmp_path.resolve() / "l_sequenceguider" / "media" / item["id"]
+    assert d["status"] == "done" and d["lesson"] == "l_sequenceguider" and d["media"] == item["id"] == job.media
+    assert str(out) in d["log"] and "--speakers" in d["log"]
+    (m,) = find_lessons(tmp_path)[0]["media"]
+    assert m["analysis"] == "notes" and not m["has_notes"]
+    out.mkdir(parents=True)
+    (out / "notes.json").write_text(json.dumps({"duration_s": 60, "practice": [{"id": "p1", "text": "축"}]}), "utf-8")
+    (m,) = find_lessons(tmp_path)[0]["media"]
+    assert m["has_notes"] and m["checklist"] == [{"id": "p1", "text": "축"}]

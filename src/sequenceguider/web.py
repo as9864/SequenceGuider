@@ -2,6 +2,8 @@
 
 Everything lives in one home folder:
     <home>/<name>_sequenceguider/   one lesson each (what `analyze` and/or `notes` write)
+        media.json                  more videos/recordings on the same lesson (e.g. the final demo)
+        media/<id>/                 what `notes`/`analyze` wrote for one of them, if it was analysed
     <home>/records.db               checklist ticks and practice sessions (records.py)
     <home>/.jobs/<id>.log           output of analyses started from the web page
 
@@ -44,18 +46,68 @@ def _read_json(path: Path) -> dict | None:
         return None
 
 
+MEDIA_JSON = "media.json"
+
+
+def read_media(folder: Path) -> dict:
+    """media.json: {"title": ..., "items": [{id, title, source, media, analysis, added_at}]}"""
+    data = _read_json(folder / MEDIA_JSON) or {}
+    return {"title": data.get("title"), "items": [i for i in data.get("items", []) if isinstance(i, dict) and "id" in i]}
+
+
+def write_media(folder: Path, data: dict) -> None:
+    tmp = folder / (MEDIA_JSON + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(folder / MEDIA_JSON)
+
+
+def new_media_item(source: str, title: str = "") -> dict:
+    """A video or recording to keep on a lesson: a local file (left where it is) or a YouTube link."""
+    source = source.strip().strip('"')
+    if not source:
+        raise ValueError("유튜브 링크나 영상·녹음 파일 경로를 넣어 주세요")
+    if re.match(r"^https?://", source, re.IGNORECASE):
+        media, name = "youtube", "유튜브 영상"
+    else:
+        path = Path(source).expanduser()
+        if not path.is_file():
+            raise ValueError(f"파일이 없습니다: {source}")
+        ext = path.suffix.lower()
+        if ext not in VIDEO_EXTS | AUDIO_EXTS:
+            raise ValueError(f"영상·녹음 파일이 아닙니다: {path.name}")
+        media, name, source = ("audio" if ext in AUDIO_EXTS else "video"), path.stem, str(path.resolve())
+    return {"id": uuid.uuid4().hex[:8], "title": title.strip() or name, "source": source, "media": media,
+            "analysis": "none", "added_at": datetime.now().isoformat(timespec="seconds")}
+
+
+def lesson_media(folder: Path) -> list[dict]:
+    """The lesson's extra media, each with what its analysis (if any) has produced so far."""
+    out = []
+    for item in read_media(folder)["items"]:
+        sub = folder / "media" / item["id"]
+        notes = _read_json(sub / "notes.json")
+        out.append({**item,
+                    "has_notes": notes is not None,
+                    "has_guide": (sub / "index.html").is_file() and (sub / "result.json").is_file(),
+                    "duration_s": (notes or {}).get("duration_s"),
+                    "checklist": [{"id": p["id"], "text": p.get("text", "")}
+                                  for p in (notes or {}).get("practice", []) if "id" in p]})
+    return out
+
+
 def find_lessons(home: Path) -> list[dict]:
     """Every lesson folder directly under `home`, newest first.
 
     A folder is a lesson if `analyze` wrote its guide there (result.json + index.html),
-    `notes` wrote its notes (notes.json), or both.
+    `notes` wrote its notes (notes.json), media was added to it (media.json), or any of these.
     """
     lessons = []
     for folder in sorted(p for p in home.iterdir() if p.is_dir() and not p.name.startswith(".")):
         result = folder / "result.json"
         data = _read_json(result) if (folder / "index.html").is_file() else None
         notes = _read_json(folder / "notes.json")
-        if data is None and notes is None:
+        media = lesson_media(folder)
+        if data is None and notes is None and not media:
             continue
         data = data or {}
         figures = []
@@ -67,10 +119,11 @@ def find_lessons(home: Path) -> list[dict]:
                 "key_point": lesson.get("key_point", ""),
                 "checklist": lesson.get("checklist", []),
             })
-        stamps = [p.stat().st_mtime for p in (result, folder / "notes.json") if p.is_file()]
+        stamps = [p.stat().st_mtime for p in (result, folder / "notes.json", folder / MEDIA_JSON) if p.is_file()]
         lessons.append({
             "id": folder.name,
-            "title": (notes or {}).get("title") or data.get("title") or folder.name.removesuffix("_sequenceguider"),
+            "title": ((notes or {}).get("title") or data.get("title") or read_media(folder)["title"]
+                      or folder.name.removesuffix("_sequenceguider")),
             "source_url": data.get("source_url") or (notes or {}).get("source_url"),
             "role": data.get("role", "all"),
             "figures": figures,
@@ -83,6 +136,7 @@ def find_lessons(home: Path) -> list[dict]:
                             for k in dict.fromkeys(k for s in notes.get("sections", []) for k in s.get("figures", []))],
                 "checklist": [{"id": p["id"], "text": p.get("text", "")} for p in notes.get("practice", []) if "id" in p],
             },
+            "media": media,
             "updated_at": datetime.fromtimestamp(max(stamps)).isoformat(timespec="seconds"),
         })
     return sorted(lessons, key=lambda x: x["updated_at"], reverse=True)
@@ -99,6 +153,7 @@ class Job:
     started_at: str
     status: str = "running"  # running | done | failed
     lesson: str | None = None
+    media: str | None = None  # the lesson's media.json item this job analyses
     log: str = ""
     _proc: subprocess.Popen | None = field(default=None, repr=False)
 
@@ -114,7 +169,8 @@ class Jobs:
         self._lock = threading.Lock()
 
     def start(self, source: str, sequence: str = "", role: str = "all", view: str = "side",
-              kind: str = "analyze", speakers: str = "") -> Job:
+              kind: str = "analyze", speakers: str = "", *, out: Path | None = None,
+              lesson: str | None = None, media: str | None = None) -> Job:
         source = source.strip().strip('"')
         if not source:
             raise ValueError("유튜브 링크나 영상·녹음 파일 경로를 넣어 주세요")
@@ -130,9 +186,7 @@ class Jobs:
                 raise ValueError("파일 영상은 시퀀스 순서를 적어 주세요")
             source = str(path.resolve())
             # results go in the home folder, where the library looks, not next to the video
-            out = self.home / f"{path.stem}_sequenceguider"
-        else:
-            out = None
+            out = out or self.home / f"{path.stem}_sequenceguider"
         if kind == "notes":
             cmd = [*self.command, "notes", source, "--role", role]
             if speakers.strip():
@@ -145,7 +199,7 @@ class Jobs:
             cmd += ["--out", str(out)]
         self.dir.mkdir(parents=True, exist_ok=True)
         job = Job(id=uuid.uuid4().hex[:8], kind=kind, source=source, sequence=sequence.strip(), role=role, view=view,
-                  started_at=datetime.now().isoformat(timespec="seconds"))
+                  started_at=datetime.now().isoformat(timespec="seconds"), lesson=lesson, media=media)
         log = open(self.dir / f"{job.id}.log", "wb")
         env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
         job._proc = subprocess.Popen(cmd, cwd=self.home, stdout=log, stderr=subprocess.STDOUT, env=env)
@@ -164,7 +218,7 @@ class Jobs:
         job.log = "\n".join(ln for ln in lines if ln.strip())[-4000:]
         if job.status == "running" and job._proc is not None and job._proc.poll() is not None:
             job.status = "done" if job._proc.returncode == 0 else "failed"
-            if m := re.search(r"(?:리포트|노트): (.+)", raw):
+            if job.lesson is None and (m := re.search(r"(?:리포트|노트): (.+)", raw)):
                 job.lesson = Path(m.group(1).strip()).parent.name
 
     def list(self) -> list[dict]:
@@ -206,6 +260,86 @@ class App:
         if path.suffix.lower() not in VIDEO_EXTS | AUDIO_EXTS or not path.is_file():
             return None
         return path
+
+    # -- more media on one lesson: the class recording, then the final demo, ...
+
+    def _lesson_dir(self, lesson: str) -> Path:
+        base = (self.home / lesson).resolve()
+        if base.parent != self.home or not base.is_dir():
+            raise ValueError("없는 레슨입니다")
+        return base
+
+    def add_media(self, lesson: str, source: str, title: str = "", analysis: str = "none", **opts) -> dict:
+        """Keep one more video/recording on the lesson; analyse it now only if asked (a demo often needn't be)."""
+        base = self._lesson_dir(lesson)
+        item = new_media_item(source, title)
+        data = read_media(base)
+        if analysis != "none":  # start first: a missing sequence etc. then adds nothing
+            self._analyze(base, item, analysis, **opts)
+        data["items"].append(item)
+        write_media(base, data)
+        return item
+
+    def analyze_media(self, lesson: str, media_id: str, analysis: str, **opts) -> Job:
+        """Analyse a media item later (it was added without analysis, or the analysis failed)."""
+        base = self._lesson_dir(lesson)
+        data = read_media(base)
+        item = next((i for i in data["items"] if i["id"] == media_id), None)
+        if item is None:
+            raise ValueError("없는 영상입니다")
+        job = self._analyze(base, item, analysis, **opts)
+        write_media(base, data)
+        return job
+
+    def _analyze(self, base: Path, item: dict, analysis: str, role: str = "all", view: str = "side",
+                 sequence: str = "", speakers: str = "") -> Job:
+        if analysis not in ("notes", "analyze"):
+            raise ValueError("분석 종류가 올바르지 않습니다")
+        if analysis == "analyze" and item["media"] == "audio":
+            raise ValueError("녹음 파일은 동작 분석을 할 수 없어요 (레슨 노트는 돼요)")
+        job = self.jobs.start(item["source"], sequence, role, view, analysis, speakers,
+                              out=base / "media" / item["id"], lesson=base.name, media=item["id"])
+        item["analysis"] = analysis
+        return job
+
+    def remove_media(self, lesson: str, media_id: str) -> bool:
+        """Off the lesson's list. The file itself, and anything analysed from it, stay on disk."""
+        base = self._lesson_dir(lesson)
+        data = read_media(base)
+        items = [i for i in data["items"] if i["id"] != media_id]
+        if len(items) == len(data["items"]):
+            return False
+        write_media(base, {**data, "items": items})
+        return True
+
+    def media_file(self, lesson: str, media_id: str) -> Path | None:
+        try:
+            base = self._lesson_dir(lesson)
+        except ValueError:
+            return None
+        item = next((i for i in read_media(base)["items"] if i["id"] == media_id), None)
+        if item is None or item["media"] == "youtube":
+            return None
+        path = Path(item["source"])
+        if path.suffix.lower() not in VIDEO_EXTS | AUDIO_EXTS or not path.is_file():
+            return None
+        return path
+
+    def create_lesson(self, source: str, title: str = "") -> str:
+        """A lesson with just media, nothing analysed (more can be added, and analysed, later)."""
+        item = new_media_item(source, title)
+        stem = Path(item["source"]).stem if item["media"] != "youtube" else "youtube_" + item["id"]
+        base = self.home / f"{stem}_sequenceguider"
+        base.mkdir(exist_ok=True)
+        data = read_media(base)
+        data["title"] = data["title"] or item["title"]
+        data["items"].append(item)
+        write_media(base, data)
+        return base.name
+
+
+def _analysis_opts(body: dict) -> dict:
+    return {k: str(body.get(k, d)) for k, d in (("role", "all"), ("view", "side"), ("sequence", ""), ("speakers", ""))}
 
 
 def make_handler(app: App):
@@ -283,6 +417,9 @@ def make_handler(app: App):
                 if method == "GET" and (m := re.fullmatch(r"/lessons/([^/]+)/notes-video", path)):
                     f = app.notes_video(m.group(1))
                     return self._file(f) if f else self._error(404, "영상 파일을 찾지 못했습니다")
+                if method == "GET" and (m := re.fullmatch(r"/lessons/([^/]+)/media-file/([^/]+)", path)):
+                    f = app.media_file(*m.groups())
+                    return self._file(f) if f else self._error(404, "영상 파일을 찾지 못했습니다")
                 if method == "GET" and path.startswith("/lessons/"):
                     lesson, _, rel = path[len("/lessons/"):].partition("/")
                     f = app.lesson_file(lesson, rel or "index.html")
@@ -310,8 +447,23 @@ def make_handler(app: App):
                     return self._json(app.records.export())
                 if path == "/api/jobs" and method == "GET":
                     return self._json(app.jobs.list())
+                if (m := re.fullmatch(r"/api/lessons/([^/]+)/media", path)) and method == "POST":
+                    b = self._body()
+                    item = app.add_media(m.group(1), str(b.get("source", "")), str(b.get("title", "")),
+                                         str(b.get("analysis", "none")), **_analysis_opts(b))
+                    return self._json(item, 201)
+                if (m := re.fullmatch(r"/api/lessons/([^/]+)/media/([^/]+)/analyze", path)) and method == "POST":
+                    b = self._body()
+                    job = app.analyze_media(*m.groups(), str(b.get("analysis", "notes")), **_analysis_opts(b))
+                    return self._json({"id": job.id}, 201)
+                if (m := re.fullmatch(r"/api/lessons/([^/]+)/media/([^/]+)", path)) and method == "DELETE":
+                    ok = app.remove_media(*m.groups())
+                    return self._json({"deleted": ok}, 200 if ok else 404)
                 if path == "/api/jobs" and method == "POST":
                     b = self._body()
+                    if b.get("kind") == "none":  # just keep the video on a new lesson, analyse nothing
+                        lesson = app.create_lesson(str(b.get("source", "")), str(b.get("title", "")))
+                        return self._json({"lesson": lesson}, 201)
                     job = app.jobs.start(str(b.get("source", "")), str(b.get("sequence", "")),
                                          str(b.get("role", "all")), str(b.get("view", "side")),
                                          str(b.get("kind", "analyze")), str(b.get("speakers", "")))
