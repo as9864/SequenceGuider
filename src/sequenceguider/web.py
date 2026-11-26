@@ -9,16 +9,19 @@ Everything lives in one home folder:
     <home>/.jobs/<id>.log           output of analyses started from the web page
 
 Standard library only (http.server + sqlite3). Every page but the app shell
-and the sign-up/log-in API needs a login (a cookie). The library is shared by
-everyone with an account; records are each user's own. Only admins can start
-analyses or add media, since those read video files on this computer and
-spend its CPU (and the Claude API key, for notes).
+and the sign-up/log-in API needs a login (a cookie). Each person has their own
+library and records and sees nobody else's: the first account's library is the
+home folder itself, everyone else's is <home>/users/<id>/. Members bring videos
+by uploading them (in pieces, under Cloudflare's 100 MB request limit) and get
+a few analyses a month; only admins can use a file path on this computer or a
+YouTube link.
 """
 
 import json
 import mimetypes
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -30,7 +33,7 @@ from http import HTTPStatus
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from sequenceguider.accounts import SESSION_DAYS, Accounts, User
 from sequenceguider.db import connect, enable_wal
@@ -55,6 +58,7 @@ def _read_json(path: Path) -> dict | None:
 
 
 MEDIA_JSON = "media.json"
+RESERVED_DIRS = {"users", "backups"}  # in the home folder: other people's libraries, DB backups
 
 
 def read_media(folder: Path) -> dict:
@@ -110,7 +114,8 @@ def find_lessons(home: Path) -> list[dict]:
     `notes` wrote its notes (notes.json), media was added to it (media.json), or any of these.
     """
     lessons = []
-    for folder in sorted(p for p in home.iterdir() if p.is_dir() and not p.name.startswith(".")):
+    for folder in sorted(p for p in home.iterdir()
+                         if p.is_dir() and not p.name.startswith(".") and p.name not in RESERVED_DIRS):
         result = folder / "result.json"
         data = _read_json(result) if (folder / "index.html").is_file() else None
         notes = _read_json(folder / "notes.json")
@@ -138,6 +143,7 @@ def find_lessons(home: Path) -> list[dict]:
             "has_guide": bool(data),
             "notes": None if notes is None else {
                 "summary": notes.get("summary", ""),
+                "language": notes.get("language"),
                 "duration_s": notes.get("duration_s"),
                 "key_points": len(notes.get("key_points", [])),
                 "figures": [{"figure": k, "name_ko": (notes.get("figure_names") or {}).get(k, k)}
@@ -164,10 +170,13 @@ CREATE TABLE IF NOT EXISTS jobs (
     status      TEXT NOT NULL,          -- queued | running | done | failed
     created_at  TEXT NOT NULL,
     started_at  TEXT,
-    finished_at TEXT
+    finished_at TEXT,
+    user_id     INTEGER,                -- whose library it writes into; NULL = the home folder's owner
+    cwd         TEXT                    -- that library's folder
 );
 CREATE INDEX IF NOT EXISTS jobs_status ON jobs (status, created_at);
 """
+LESSON_LANGUAGES = ("en", "es", "ko")
 INTERRUPTED = "서버가 다시 시작되어 이 작업이 중단됐어요. 다시 분석해 주세요."
 
 
@@ -230,8 +239,13 @@ class Jobs:
 
     def start(self, source: str, sequence: str = "", role: str = "all", view: str = "side",
               kind: str = "analyze", speakers: str = "", *, out: Path | None = None,
-              lesson: str | None = None, media: str | None = None) -> Job:
-        """Check the request and put it in the queue (it starts right away if nothing else is running)."""
+              lesson: str | None = None, media: str | None = None, language: str = "",
+              home: Path | None = None, user_id: int | None = None, limit: int = 0) -> Job:
+        """Check the request and put it in the queue (it starts right away if nothing else is running).
+
+        `home`: the library the results go into (default: the home folder). `limit`: analyses `user_id`
+        may start a calendar month (0 = no limit); the queue is shared, so one person can't fill it."""
+        home = home or self.home
         source = source.strip().strip('"')
         if not source:
             raise ValueError("유튜브 링크나 영상·녹음 파일 경로를 넣어 주세요")
@@ -239,6 +253,11 @@ class Jobs:
             raise ValueError("역할이나 촬영 방향 값이 올바르지 않습니다")
         if kind not in ("analyze", "notes"):
             raise ValueError("만들 것이 올바르지 않습니다")
+        language = language.strip().lower()
+        if language not in ("", "auto", *LESSON_LANGUAGES):
+            raise ValueError("레슨 언어는 자동, 영어(en), 스페인어(es), 한국어(ko) 중에서 골라 주세요")
+        if limit and (used := self.used_this_month(user_id)) >= limit:
+            raise PermissionError(f"이번 달 분석 {limit}개를 모두 썼어요 ({used}개). 다음 달에 다시 할 수 있어요")
         if not re.match(r"^https?://", source, re.IGNORECASE):
             path = Path(source).expanduser()
             if not path.is_file():
@@ -247,9 +266,11 @@ class Jobs:
                 raise ValueError("파일 영상은 시퀀스 순서를 적어 주세요")
             source = str(path.resolve())
             # results go in the home folder, where the library looks, not next to the video
-            out = out or self.home / f"{path.stem}_sequenceguider"
+            out = out or home / f"{path.stem}_sequenceguider"
         if kind == "notes":
             cmd = [*self.command, "notes", source, "--role", role]
+            if language in LESSON_LANGUAGES:
+                cmd += ["--language", language]
             if speakers.strip():
                 cmd += ["--speakers", speakers.strip()]
         else:
@@ -262,9 +283,9 @@ class Jobs:
                   created_at=_now(), lesson=lesson, media=media, command=cmd)
         with self._db() as db:
             db.execute("INSERT INTO jobs (id, kind, source, sequence, role, view, lesson, media, command, status, "
-                       "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)",
+                       "created_at, user_id, cwd) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)",
                        (job.id, kind, source, job.sequence, role, view, lesson, media,
-                        json.dumps(cmd, ensure_ascii=False), job.created_at))
+                        json.dumps(cmd, ensure_ascii=False), job.created_at, user_id, str(home)))
         self.pump()
         return job
 
@@ -275,7 +296,9 @@ class Jobs:
         log = open(self.dir / f"{row['id']}.log", "wb")
         env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
         try:
-            proc = subprocess.Popen(json.loads(row["command"]), cwd=self.home, stdout=log,
+            cwd = Path(row["cwd"] or self.home)
+            cwd.mkdir(parents=True, exist_ok=True)
+            proc = subprocess.Popen(json.loads(row["command"]), cwd=cwd, stdout=log,
                                     stderr=subprocess.STDOUT, env=env)
         except OSError as e:
             log.write(f"시작하지 못했어요: {e}\n".encode("utf-8"))
@@ -339,10 +362,22 @@ class Jobs:
         lines = [ln.split("\r")[-1] for ln in raw.replace("\r\n", "\n").split("\n")]  # Windows ends lines in \r\n
         return "\n".join(ln for ln in lines if ln.strip())[-4000:]
 
-    def list(self, limit: int = 50) -> list[dict]:
+    def used_this_month(self, user_id: int | None) -> int:
+        month = datetime.now().strftime("%Y-%m")
+        with self._db() as db:
+            return db.execute("SELECT COUNT(*) FROM jobs WHERE user_id IS ? AND substr(created_at, 1, 7) = ? "
+                              "AND status != 'failed'", (user_id, month)).fetchone()[0]
+
+    def list(self, limit: int = 50, *, user_id: int | None = None, everyone: bool = True) -> list[dict]:
+        """Newest first. `everyone=False`: only `user_id`'s jobs (the queue positions still count everyone's)."""
         self.pump()
         with self._db() as db:
-            rows = db.execute("SELECT * FROM jobs ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,)).fetchall()
+            if everyone:
+                rows = db.execute("SELECT * FROM jobs ORDER BY created_at DESC, rowid DESC LIMIT ?",
+                                  (limit,)).fetchall()
+            else:
+                rows = db.execute("SELECT * FROM jobs WHERE user_id IS ? ORDER BY created_at DESC, rowid DESC "
+                                  "LIMIT ?", (user_id, limit)).fetchall()
             queued = [r["id"] for r in db.execute("SELECT id FROM jobs WHERE status = 'queued' "
                                                   "ORDER BY created_at, rowid")]
         out = []
@@ -355,43 +390,26 @@ class Jobs:
         return out
 
 
-class App:
-    def __init__(self, home: Path, signup: str | bool = "open", max_jobs: int = 1, *,
-                 trust_proxy: bool = False, public_url: str = ""):
-        """`trust_proxy`: requests come through a tunnel or proxy on this computer (cloudflared, Caddy), so
-        the visitor's address is in its headers. `public_url`: the https address people use, if any."""
-        self.home = home.resolve()
-        self.home.mkdir(parents=True, exist_ok=True)
-        self.records = Records(self.home / "records.db")
-        self.accounts = Accounts(self.home / "records.db", signup)
-        self.jobs = Jobs(self.home, max_jobs)
-        self.trust_proxy = trust_proxy
-        self.public_url = public_url.rstrip("/")
+class Library:
+    """One person's lessons: a folder of lesson folders. Nobody sees another person's library.
 
-    def sign_up(self, username: str, password: str, display_name: str = "", invite: str = "",
-                *, by_admin: bool = False) -> User:
-        user = self.accounts.sign_up(username, password, display_name, invite, by_admin=by_admin)
-        if user.is_admin and len(self.accounts.users()) == 1:
-            self.records.claim_unowned(user.id)  # the practice log kept before there were accounts
-        return user
+    The first account's library is the home folder itself (where `analyze`/`notes`/`batch` have always
+    written), so nothing moves; everyone else's is <home>/users/<their id>/.
+    """
 
-    def delete_account(self, user: User, password: str | None) -> None:
-        """The account, its logins and everything it recorded (kept nowhere else). Lessons are shared and stay."""
-        self.accounts.delete_user(user.id, password)
-        self.records.delete_user_data(user.id)
+    def __init__(self, root: Path, jobs: "Jobs", user_id: int | None, monthly_limit: int = 0):
+        self.root = root
+        self.jobs = jobs
+        self.user_id = user_id
+        self.monthly_limit = monthly_limit  # analyses a month, 0 = no limit (admins)
 
-    def healthy(self) -> bool:
-        try:
-            with connect(self.home / "records.db") as db:
-                db.execute("SELECT 1 FROM users LIMIT 1").fetchall()
-            return True
-        except Exception:
-            return False
+    def lessons(self) -> list[dict]:
+        return find_lessons(self.root) if self.root.is_dir() else []
 
     def lesson_file(self, lesson: str, rel: str) -> Path | None:
-        base = (self.home / lesson).resolve()
+        base = (self.root / lesson).resolve()
         path = (base / rel).resolve()
-        if base.parent != self.home or not path.is_relative_to(base) or not path.is_file():
+        if base.parent != self.root or not path.is_relative_to(base) or not path.is_file():
             return None
         return path
 
@@ -399,8 +417,8 @@ class App:
     def notes_video(self, lesson: str) -> Path | None:
         """The lesson video (or audio recording) notes.json points at. It may live outside the
         lesson folder (a 2-hour file isn't copied), so this is the one file served from elsewhere."""
-        base = (self.home / lesson).resolve()
-        if base.parent != self.home:
+        base = (self.root / lesson).resolve()
+        if base.parent != self.root:
             return None
         notes = _read_json(base / "notes.json") or {}
         ref = notes.get("video")
@@ -414,8 +432,8 @@ class App:
     # -- more media on one lesson: the class recording, then the final demo, ...
 
     def _lesson_dir(self, lesson: str) -> Path:
-        base = (self.home / lesson).resolve()
-        if base.parent != self.home or not base.is_dir():
+        base = (self.root / lesson).resolve()
+        if base.parent != self.root or not base.is_dir():
             raise ValueError("없는 레슨입니다")
         return base
 
@@ -442,13 +460,14 @@ class App:
         return job
 
     def _analyze(self, base: Path, item: dict, analysis: str, role: str = "all", view: str = "side",
-                 sequence: str = "", speakers: str = "") -> Job:
+                 sequence: str = "", speakers: str = "", language: str = "") -> Job:
         if analysis not in ("notes", "analyze"):
             raise ValueError("분석 종류가 올바르지 않습니다")
         if analysis == "analyze" and item["media"] == "audio":
             raise ValueError("녹음 파일은 동작 분석을 할 수 없어요 (레슨 노트는 돼요)")
         job = self.jobs.start(item["source"], sequence, role, view, analysis, speakers,
-                              out=base / "media" / item["id"], lesson=base.name, media=item["id"])
+                              out=base / "media" / item["id"], lesson=base.name, media=item["id"],
+                              language=language, home=self.root, user_id=self.user_id, limit=self.monthly_limit)
         item["analysis"] = analysis
         return job
 
@@ -475,12 +494,12 @@ class App:
             return None
         return path
 
-    def create_lesson(self, source: str, title: str = "") -> str:
+    def create_lesson(self, source: str, title: str = "", *, folder: str | None = None) -> str:
         """A lesson with just media, nothing analysed (more can be added, and analysed, later)."""
         item = new_media_item(source, title)
         stem = Path(item["source"]).stem if item["media"] != "youtube" else "youtube_" + item["id"]
-        base = self.home / f"{stem}_sequenceguider"
-        base.mkdir(exist_ok=True)
+        base = self.root / (folder or f"{stem}_sequenceguider")
+        base.mkdir(parents=True, exist_ok=True)
         data = read_media(base)
         data["title"] = data["title"] or item["title"]
         data["items"].append(item)
@@ -488,8 +507,186 @@ class App:
         return base.name
 
 
+
+UPLOADS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS uploads (
+    id         TEXT PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    filename   TEXT NOT NULL,
+    size       INTEGER NOT NULL,
+    received   INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+"""
+# Cloudflare's free plan refuses request bodies over 100 MB, so a 2-hour video goes up in pieces
+CHUNK_BYTES = 32 << 20
+MAX_CHUNK_BYTES = 64 << 20
+DISK_RESERVE = 5 << 30  # leave this much free on the PC's disk
+
+
+def _slug(name: str) -> str:
+    return re.sub(r"[^\w.-]+", "_", name, flags=re.UNICODE).strip("._")[:40] or "lesson"
+
+
+class App:
+    def __init__(self, home: Path, signup: str | bool = "open", max_jobs: int = 1, *,
+                 trust_proxy: bool = False, public_url: str = "", monthly_limit: int = 4,
+                 max_upload_mb: int = 4096):
+        """`trust_proxy`: requests come through a tunnel or proxy on this computer (cloudflared, Caddy), so
+        the visitor's address is in its headers. `public_url`: the https address people use, if any.
+        `monthly_limit`: analyses a member may start each month (0 = no limit; admins have none)."""
+        self.home = home.resolve()
+        self.home.mkdir(parents=True, exist_ok=True)
+        self.records = Records(self.home / "records.db")
+        self.accounts = Accounts(self.home / "records.db", signup)
+        self.jobs = Jobs(self.home, max_jobs)
+        self.trust_proxy = trust_proxy
+        self.public_url = public_url.rstrip("/")
+        self.monthly_limit = max(0, monthly_limit)
+        self.max_upload = max_upload_mb << 20
+        self.uploads_dir = self.home / ".uploads"
+        with connect(self.home / "records.db") as db:
+            db.executescript(UPLOADS_SCHEMA)
+
+    # -- whose lessons ---------------------------------------------------------------
+
+    def owner_id(self) -> int | None:
+        """The account whose library is the home folder itself: the earliest admin."""
+        with connect(self.home / "records.db") as db:
+            row = db.execute("SELECT MIN(id) FROM users WHERE is_admin = 1").fetchone()
+        return row[0]
+
+    def library(self, user: User | None = None) -> Library:
+        """`None`: the home folder's library (the CLI, tests)."""
+        if user is None or user.id == self.owner_id():
+            return Library(self.home, self.jobs, None)
+        return Library(self.home / "users" / str(user.id), self.jobs, user.id,
+                       0 if user.is_admin else self.monthly_limit)
+
+    # -- accounts ----------------------------------------------------------------------
+
+    def sign_up(self, username: str, password: str, display_name: str = "", invite: str = "",
+                *, by_admin: bool = False) -> User:
+        user = self.accounts.sign_up(username, password, display_name, invite, by_admin=by_admin)
+        if user.is_admin and len(self.accounts.users()) == 1:
+            self.records.claim_unowned(user.id)  # the practice log kept before there were accounts
+        return user
+
+    def delete_account(self, user: User, password: str | None) -> None:
+        """The account, its logins, everything it recorded and every video it uploaded."""
+        lib = self.library(user)
+        self.accounts.delete_user(user.id, password)
+        self.records.delete_user_data(user.id)
+        if lib.root != self.home and lib.root.is_dir():
+            shutil.rmtree(lib.root, ignore_errors=True)
+        for part in self.uploads_dir.glob(f"{user.id}-*.part"):
+            part.unlink(missing_ok=True)
+
+    def healthy(self) -> bool:
+        try:
+            with connect(self.home / "records.db") as db:
+                db.execute("SELECT 1 FROM users LIMIT 1").fetchall()
+            return True
+        except Exception:
+            return False
+
+    # -- uploading a video from the browser, in pieces -------------------------------
+
+    def _part(self, user_id: int, upload_id: str) -> Path:
+        return self.uploads_dir / f"{user_id}-{upload_id}.part"
+
+    def begin_upload(self, user: User, filename: str, size: int) -> dict:
+        name = Path(filename.replace("\\", "/")).name
+        ext = Path(name).suffix.lower()
+        if ext not in VIDEO_EXTS | AUDIO_EXTS:
+            raise ValueError(f"영상·녹음 파일만 올릴 수 있어요 ({', '.join(sorted(VIDEO_EXTS | AUDIO_EXTS))})")
+        if not 0 < size <= self.max_upload:
+            raise ValueError(f"파일은 {self.max_upload >> 20} MB까지 올릴 수 있어요")
+        lib = self.library(user)
+        if lib.monthly_limit and self.jobs.used_this_month(lib.user_id) >= lib.monthly_limit:
+            raise PermissionError(f"이번 달 분석 {lib.monthly_limit}개를 모두 썼어요. 다음 달에 다시 올려 주세요")
+        self.uploads_dir.mkdir(parents=True, exist_ok=True)
+        if shutil.disk_usage(self.uploads_dir).free < size + DISK_RESERVE:
+            raise PermissionError("서버 디스크가 거의 찼어요. 관리자에게 알려 주세요")
+        upload_id = uuid.uuid4().hex[:12]
+        self._part(user.id, upload_id).write_bytes(b"")
+        with connect(self.home / "records.db") as db:
+            db.execute("INSERT INTO uploads (id, user_id, filename, size, created_at) VALUES (?, ?, ?, ?, ?)",
+                       (upload_id, user.id, name, size, _now()))
+        return {"id": upload_id, "chunk_size": CHUNK_BYTES, "received": 0}
+
+    def _upload(self, user: User, upload_id: str):
+        with connect(self.home / "records.db") as db:
+            row = db.execute("SELECT * FROM uploads WHERE id = ? AND user_id = ?", (upload_id, user.id)).fetchone()
+        if row is None:
+            raise ValueError("없는 업로드예요")
+        return row
+
+    def put_chunk(self, user: User, upload_id: str, offset: int, length: int, stream) -> int:
+        """Append one piece. `offset` must be what has arrived so far, so a retried piece is never doubled."""
+        row = self._upload(user, upload_id)
+        if offset != row["received"]:
+            raise UploadOffset(row["received"])
+        if not 0 < length <= MAX_CHUNK_BYTES or offset + length > row["size"]:
+            raise ValueError("조각 크기가 올바르지 않아요")
+        part = self._part(user.id, upload_id)
+        with open(part, "r+b") as f:
+            f.truncate(offset)  # drop the tail of a piece that broke off half-way
+            f.seek(offset)
+            left = length
+            while left > 0:
+                chunk = stream.read(min(1 << 20, left))
+                if not chunk:
+                    raise ValueError("업로드가 중간에 끊겼어요")
+                f.write(chunk)
+                left -= len(chunk)
+        with connect(self.home / "records.db") as db:
+            db.execute("UPDATE uploads SET received = ? WHERE id = ?", (offset + length, upload_id))
+        return offset + length
+
+    def finish_upload(self, user: User, upload_id: str, title: str = "", analysis: str = "notes",
+                      lesson: str = "", **opts) -> dict:
+        """Put the file in the person's library: a new lesson, or one more video on `lesson`; analyse if asked."""
+        row = self._upload(user, upload_id)
+        if row["received"] != row["size"]:
+            raise ValueError("아직 다 올라가지 않았어요")
+        lib = self.library(user)
+        stem, ext = Path(row["filename"]).stem, Path(row["filename"]).suffix.lower()
+        base = lib._lesson_dir(lesson) if lesson else lib.root / f"{_slug(stem)}_{upload_id[:6]}_sequenceguider"
+        dest = base / "files" / f"{_slug(stem)}_{upload_id[:6]}{ext}"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(self._part(user.id, upload_id)), dest)
+        with connect(self.home / "records.db") as db:
+            db.execute("DELETE FROM uploads WHERE id = ?", (upload_id,))
+        title = title.strip() or stem
+        try:
+            if lesson:
+                item = lib.add_media(lesson, str(dest), title, analysis, **opts)
+            else:
+                lib.create_lesson(str(dest), title, folder=base.name)
+                item = read_media(base)["items"][-1]
+                if analysis != "none":
+                    lib.analyze_media(base.name, item["id"], analysis, **opts)
+        except (ValueError, PermissionError):
+            if not lesson:  # nothing half-made: the lesson goes, the video with it
+                shutil.rmtree(base, ignore_errors=True)
+            else:
+                dest.unlink(missing_ok=True)
+            raise
+        return {"lesson": base.name, "media": item["id"]}
+
+
+class UploadOffset(Exception):
+    """The browser's offset doesn't match what arrived: it should carry on from `received`."""
+
+    def __init__(self, received: int):
+        super().__init__(received)
+        self.received = received
+
+
 def _analysis_opts(body: dict) -> dict:
-    return {k: str(body.get(k, d)) for k, d in (("role", "all"), ("view", "side"), ("sequence", ""), ("speakers", ""))}
+    return {k: str(body.get(k, d)) for k, d in (("role", "all"), ("view", "side"), ("sequence", ""), ("speakers", ""),
+                                                 ("language", ""))}
 
 
 def make_handler(app: App):
@@ -629,8 +826,12 @@ def make_handler(app: App):
                 user = app.accounts.user_for(self._token())
                 if user is None:
                     return self._error(401, "로그인이 필요해요")
-                if not user.is_admin and method != "GET" and path.startswith(("/api/jobs", "/api/lessons/")):
-                    return self._error(403, "분석을 시작하거나 영상을 추가·삭제하는 건 관리자만 할 수 있어요")
+                lib = app.library(user)  # everything below is this person's own lessons
+                # a file path or a YouTube link reads this computer or downloads someone's video: admins only.
+                # Members bring their own videos by uploading them.
+                if not user.is_admin and method == "POST" and (
+                        path == "/api/jobs" or re.fullmatch(r"/api/lessons/[^/]+/media", path)):
+                    return self._error(403, "영상은 업로드로 올려 주세요. 파일 경로·유튜브 링크는 관리자만 쓸 수 있어요")
                 if path == "/api/invites":
                     if not user.is_admin:
                         return self._error(403, "초대 코드는 관리자만 만들 수 있어요")
@@ -641,17 +842,17 @@ def make_handler(app: App):
                     if method == "GET":
                         return self._json(app.accounts.invites())
                 if method == "GET" and (m := re.fullmatch(r"/lessons/([^/]+)/notes-video", path)):
-                    f = app.notes_video(m.group(1))
+                    f = lib.notes_video(m.group(1))
                     return self._file(f) if f else self._error(404, "영상 파일을 찾지 못했습니다")
                 if method == "GET" and (m := re.fullmatch(r"/lessons/([^/]+)/media-file/([^/]+)", path)):
-                    f = app.media_file(*m.groups())
+                    f = lib.media_file(*m.groups())
                     return self._file(f) if f else self._error(404, "영상 파일을 찾지 못했습니다")
                 if method == "GET" and path.startswith("/lessons/"):
                     lesson, _, rel = path[len("/lessons/"):].partition("/")
-                    f = app.lesson_file(lesson, rel or "index.html")
+                    f = lib.lesson_file(lesson, rel or "index.html")
                     return self._file(f) if f else self._error(404, "없는 파일입니다")
                 if path == "/api/lessons" and method == "GET":
-                    return self._json(find_lessons(app.home))
+                    return self._json(lib.lessons())
                 if path == "/api/checks" and method == "GET":
                     return self._json(app.records.checks(user.id))
                 if path == "/api/checks" and method == "PUT":
@@ -672,27 +873,51 @@ def make_handler(app: App):
                 if path == "/api/export" and method == "GET":
                     return self._json(app.records.export(user.id))
                 if path == "/api/jobs" and method == "GET":  # sources are paths on this computer: admins only
-                    return self._json(app.jobs.list() if user.is_admin else [])
+                    return self._json(app.jobs.list(user_id=lib.user_id, everyone=False))
+                if path == "/api/usage" and method == "GET":
+                    return self._json({"used": app.jobs.used_this_month(lib.user_id), "limit": lib.monthly_limit,
+                                       "max_upload_mb": app.max_upload >> 20})
+                if path == "/api/uploads" and method == "POST":
+                    b = self._body()
+                    return self._json(app.begin_upload(user, str(b.get("filename", "")), int(b.get("size") or 0)), 201)
+                if (m := re.fullmatch(r"/api/uploads/([0-9a-f]+)", path)) and method == "PUT":
+                    offset = int(parse_qs(urlparse(self.path).query).get("offset", ["0"])[0])
+                    length = int(self.headers.get("Content-Length") or 0)
+                    try:
+                        received = app.put_chunk(user, m.group(1), offset, length, self.rfile)
+                    except UploadOffset as e:
+                        self.close_connection = True  # the body wasn't read
+                        return self._json({"error": "이어서 올릴 위치가 달라요", "received": e.received}, 409)
+                    except ValueError:
+                        self.close_connection = True  # nor here, maybe not all of it
+                        raise
+                    return self._json({"received": received})
+                if (m := re.fullmatch(r"/api/uploads/([0-9a-f]+)/finish", path)) and method == "POST":
+                    b = self._body()
+                    out = app.finish_upload(user, m.group(1), str(b.get("title", "")), str(b.get("analysis", "notes")),
+                                            str(b.get("lesson", "")), **_analysis_opts(b))
+                    return self._json(out, 201)
                 if (m := re.fullmatch(r"/api/lessons/([^/]+)/media", path)) and method == "POST":
                     b = self._body()
-                    item = app.add_media(m.group(1), str(b.get("source", "")), str(b.get("title", "")),
+                    item = lib.add_media(m.group(1), str(b.get("source", "")), str(b.get("title", "")),
                                          str(b.get("analysis", "none")), **_analysis_opts(b))
                     return self._json(item, 201)
                 if (m := re.fullmatch(r"/api/lessons/([^/]+)/media/([^/]+)/analyze", path)) and method == "POST":
                     b = self._body()
-                    job = app.analyze_media(*m.groups(), str(b.get("analysis", "notes")), **_analysis_opts(b))
+                    job = lib.analyze_media(*m.groups(), str(b.get("analysis", "notes")), **_analysis_opts(b))
                     return self._json({"id": job.id}, 201)
                 if (m := re.fullmatch(r"/api/lessons/([^/]+)/media/([^/]+)", path)) and method == "DELETE":
-                    ok = app.remove_media(*m.groups())
+                    ok = lib.remove_media(*m.groups())
                     return self._json({"deleted": ok}, 200 if ok else 404)
                 if path == "/api/jobs" and method == "POST":
                     b = self._body()
                     if b.get("kind") == "none":  # just keep the video on a new lesson, analyse nothing
-                        lesson = app.create_lesson(str(b.get("source", "")), str(b.get("title", "")))
+                        lesson = lib.create_lesson(str(b.get("source", "")), str(b.get("title", "")))
                         return self._json({"lesson": lesson}, 201)
                     job = app.jobs.start(str(b.get("source", "")), str(b.get("sequence", "")),
                                          str(b.get("role", "all")), str(b.get("view", "side")),
-                                         str(b.get("kind", "analyze")), str(b.get("speakers", "")))
+                                         str(b.get("kind", "analyze")), str(b.get("speakers", "")),
+                                         language=str(b.get("language", "")), home=lib.root, user_id=lib.user_id)
                     return self._json({"id": job.id}, 201)
                 return self._error(404, "없는 주소입니다")
             except PermissionError as e:
@@ -744,8 +969,10 @@ def make_handler(app: App):
 
 
 def make_server(home: Path, host: str = "127.0.0.1", port: int = 8765, signup: str | bool = "open",
-                max_jobs: int = 1, *, trust_proxy: bool = False, public_url: str = "") -> ThreadingHTTPServer:
-    app = App(home, signup, max_jobs, trust_proxy=trust_proxy, public_url=public_url)
+                max_jobs: int = 1, *, trust_proxy: bool = False, public_url: str = "", monthly_limit: int = 4,
+                max_upload_mb: int = 4096) -> ThreadingHTTPServer:
+    app = App(home, signup, max_jobs, trust_proxy=trust_proxy, public_url=public_url, monthly_limit=monthly_limit,
+              max_upload_mb=max_upload_mb)
     app.jobs.recover()  # this is the one server for the folder: jobs it left running are gone
     server = ThreadingHTTPServer((host, port), make_handler(app))
     server.daemon_threads = True

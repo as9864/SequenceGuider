@@ -483,6 +483,8 @@ def serve(
     signup: str = typer.Option("open", help="가입 방식: open(누구나) · invite(초대 코드가 있어야, 인터넷에 열 때) · "
                                             "closed(관리자가 `users add`로만)"),
     max_jobs: int = typer.Option(1, help="분석을 동시에 몇 개까지 돌릴지. 나머지는 차례를 기다립니다"),
+    monthly_limit: int = typer.Option(4, help="회원 한 명이 한 달에 시작할 수 있는 분석 수 (0: 제한 없음, 관리자는 늘 없음)"),
+    max_upload_mb: int = typer.Option(4096, help="업로드 한 개의 최대 크기 (MB)"),
     behind_proxy: bool = typer.Option(False, "--behind-proxy",
                                       help="Cloudflare Tunnel(cloudflared)이나 Caddy가 이 PC에서 요청을 넘겨줄 때. "
                                            "방문자의 실제 주소와 https 여부를 그 헤더에서 읽습니다"),
@@ -497,7 +499,7 @@ def serve(
 
     try:
         server = make_server(home, host, port, signup=signup, max_jobs=max_jobs, trust_proxy=behind_proxy,
-                             public_url=public_url)
+                             public_url=public_url, monthly_limit=monthly_limit, max_upload_mb=max_upload_mb)
     except ValueError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(1)

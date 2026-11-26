@@ -3,6 +3,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import pytest
@@ -229,8 +230,9 @@ def test_media_analysis_goes_to_its_own_folder(tmp_path):
     rec.write_bytes(b"")
     app = App(tmp_path)
     app.jobs.command = [sys.executable, "-c", "import sys; print(' '.join(sys.argv[1:])); print('노트: x/notes.json')"]
-    item = app.add_media("l_sequenceguider", str(rec), "", "none")
-    job = app.analyze_media("l_sequenceguider", item["id"], "notes", speakers="A=남/en")
+    lib = app.library()
+    item = lib.add_media("l_sequenceguider", str(rec), "", "none")
+    job = lib.analyze_media("l_sequenceguider", item["id"], "notes", speakers="A=남/en")
     for _ in range(100):
         (d,) = app.jobs.list()
         if d["status"] not in ("queued", "running"):
@@ -494,3 +496,95 @@ def test_backup_is_a_working_copy(tmp_path):
     acc.sign_up("han", "password123")
     copy = backup(tmp_path / "records.db", tmp_path / "b" / "records-1.db")
     assert [u.username for u in Accounts(copy).users()] == ["han"]
+
+
+def sign_up_member(server, name="m1"):
+    _, headers, _ = call(server, "/api/auth/signup", "POST", {"username": name, "password": "password123"}, auth=False)
+    return {"Cookie": login_cookie(headers)}
+
+
+def upload(server, who, data: bytes, filename="수업 1.mp4", chunk=None, **finish):
+    status, _, body = call(server, "/api/uploads", "POST", {"filename": filename, "size": len(data)}, headers=who)
+    assert status == 201, body
+    up = json.loads(body)
+    step = chunk or up["chunk_size"]
+    for off in range(0, len(data), step):
+        req = urllib.request.Request(f"{server}/api/uploads/{up['id']}?offset={off}", method="PUT",
+                                     data=data[off:off + step], headers=who)
+        with urllib.request.urlopen(req) as res:
+            assert json.loads(res.read())["received"] == min(off + step, len(data))
+    return up["id"], call(server, f"/api/uploads/{up['id']}/finish", "POST", finish, headers=who)
+
+
+class TestPrivateLibraries:
+    def test_members_see_only_their_own_lessons(self, server, home):
+        member = sign_up_member(server)
+        assert json.loads(call(server, "/api/lessons", headers=member)[2]) == []
+        assert call(server, "/lessons/lesson1_sequenceguider/index.html", headers=member)[0] == 404
+        assert [l["id"] for l in json.loads(call(server, "/api/lessons")[2])] == ["lesson1_sequenceguider"]
+
+    def test_upload_in_pieces_makes_a_private_lesson(self, server, home):
+        member = sign_up_member(server)
+        data = bytes(range(256)) * 40  # 10 KB in 4 KB pieces
+        upload_id, (status, _, body) = upload(server, member, data, chunk=4096, title="밀롱가 수업",
+                                              analysis="none")
+        assert status == 201, body
+        lesson = json.loads(body)["lesson"]
+        (mine,) = json.loads(call(server, "/api/lessons", headers=member)[2])
+        assert mine["id"] == lesson and mine["title"] == "밀롱가 수업"
+        (item,) = mine["media"]
+        url = f"/lessons/{urllib.parse.quote(lesson)}/media-file/{item['id']}"
+        assert call(server, url, headers=member)[2] == data
+        assert lesson not in [l["id"] for l in json.loads(call(server, "/api/lessons")[2])]  # the admin doesn't see it
+        assert call(server, url)[0] == 404
+        assert (home / "users").is_dir() and not list((home / ".uploads").glob("*.part"))
+
+    def test_upload_resumes_and_checks(self, server):
+        member = sign_up_member(server)
+        assert call(server, "/api/uploads", "POST", {"filename": "a.txt", "size": 10}, headers=member)[0] == 400
+        _, _, body = call(server, "/api/uploads", "POST", {"filename": "a.mp4", "size": 10}, headers=member)
+        up = json.loads(body)["id"]
+        req = urllib.request.Request(f"{server}/api/uploads/{up}?offset=5", method="PUT", data=b"12345", headers=member)
+        try:
+            urllib.request.urlopen(req)
+            raise AssertionError("offset 5 before anything arrived")
+        except urllib.error.HTTPError as e:
+            assert e.code == 409 and json.loads(e.read())["received"] == 0
+        assert call(server, f"/api/uploads/{up}/finish", "POST", {}, headers=member)[0] == 400  # not all there
+        other = sign_up_member(server, "m2")
+        req = urllib.request.Request(f"{server}/api/uploads/{up}?offset=0", method="PUT", data=b"1234567890",
+                                     headers=other)
+        try:
+            urllib.request.urlopen(req)
+            raise AssertionError("someone else's upload")
+        except urllib.error.HTTPError as e:
+            assert e.code == 400
+
+    def test_upload_analysis_language_and_monthly_limit(self, home):
+        srv = make_server(home, port=0, monthly_limit=1)
+        srv.app.jobs.command = [sys.executable, "-c", "print('노트: x/notes.json')"]
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{srv.server_address[1]}"
+        try:
+            log_in_admin(base)
+            member = sign_up_member(base)
+            _, (status, _, body) = upload(base, member, b"x" * 100, analysis="notes", language="es")
+            assert status == 201, body
+            (job,) = json.loads(call(base, "/api/jobs", headers=member)[2])
+            cmd = json.loads(srv.app.jobs._db().execute("SELECT command FROM jobs").fetchone()[0])
+            assert cmd[cmd.index("--language") + 1] == "es" and job["lesson"] == json.loads(body)["lesson"]
+            assert json.loads(call(base, "/api/jobs")[2]) == []  # the admin's list is the admin's library
+            assert json.loads(call(base, "/api/usage", headers=member)[2])["used"] == 1
+            status, _, body = call(base, "/api/uploads", "POST", {"filename": "b.mp4", "size": 5}, headers=member)
+            assert status == 403 and "이번 달" in json.loads(body)["error"]
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_leaving_removes_uploaded_videos(self, server, home):
+        member = sign_up_member(server)
+        upload(server, member, b"y" * 50, analysis="none")
+        (lib,) = (home / "users").iterdir()
+        assert any(lib.rglob("*.mp4"))
+        assert call(server, "/api/auth/me", "DELETE", {"password": "password123"}, headers=member)[0] == 200
+        assert not lib.exists()

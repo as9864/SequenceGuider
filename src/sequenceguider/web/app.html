@@ -340,7 +340,7 @@ async function renderLibrary() {
     </a>`;
   }).join('');
   view.innerHTML = `<main>
-    <div class="row between"><h1>내 레슨</h1><button class="primary admin-only" id="new-btn">＋ 새 레슨</button></div>
+    <div class="row between"><h1>내 레슨</h1><button class="primary" id="new-btn">＋ 새 레슨</button></div>
     <section class="panel" id="new-panel" hidden>
       <form id="new-form">
         <label class="field" for="nf-kind">만들 것</label>
@@ -352,18 +352,23 @@ async function renderLibrary() {
         <div class="none-only"><label class="field" for="nf-title">레슨 이름 <span class="muted small">(비우면 파일 이름)</span></label>
         <input id="nf-title" placeholder="10월 수업 — 오초 꼬르따도"></div>
         <div class="form-grid">
-          <div><label class="field" for="nf-source">유튜브 링크 또는 영상·녹음 파일 경로</label>
-            <input id="nf-source" placeholder="https://youtu.be/... 또는 C:\\videos\\practice.mp4, lesson.m4a" required></div>
+          <div><label class="field" for="nf-file">영상·녹음 파일 올리기</label>
+            <input id="nf-file" type="file" accept="video/*,audio/*,.mkv,.m4a">
+            <div class="admin-only"><label class="field" for="nf-source">또는 유튜브 링크·이 PC의 파일 경로 <span class="muted small">(관리자)</span></label>
+            <input id="nf-source" placeholder="https://youtu.be/... 또는 C:\\videos\\practice.mp4, lesson.m4a"></div></div>
           <div class="analysis-only"><label class="field" for="nf-role">관점</label>
             <select id="nf-role"><option value="all">리더·팔로워 공통</option><option value="leader">리더</option><option value="follower">팔로워</option></select></div>
           <div class="analyze-only"><label class="field" for="nf-view">촬영 방향</label>
             <select id="nf-view"><option value="side">측면 (권장)</option><option value="front">정면</option></select></div>
         </div>
+        <div class="notes-only"><label class="field" for="nf-lang">레슨 언어</label>
+        <select id="nf-lang"><option value="">자동으로 알아내기</option><option value="es">스페인어</option><option value="en">영어</option><option value="ko">한국어</option></select></div>
         <div class="notes-only"><label class="field" for="nf-speakers">화자 <span class="muted small">(여러 명이면. 이름=성별/언어, 쉼표로 구분)</span></label>
         <input id="nf-speakers" placeholder="남자 강사=남/en, 여자 강사=여/en, 통역=남/ko"></div>
         <div class="analyze-only"><label class="field" for="nf-seq">시퀀스 순서 <span class="muted small">(유튜브는 비워 두면 챕터·설명란에서 읽어요)</span></label>
         <input id="nf-seq" placeholder="살리다, 오초 아뜨라스 x3, 푸에라 데 에헤"></div>
         <p class="small muted" id="nf-hint"></p>
+        <div class="meter" id="nf-progress" hidden><div style="width:0%"></div></div>
         <div class="error" id="nf-error"></div>
         <div class="row" style="justify-content:flex-end"><button class="primary" id="nf-submit">분석 시작</button></div>
       </form>
@@ -371,10 +376,11 @@ async function renderLibrary() {
     </section>
     ${lessons.length ? `<div class="grid" style="margin-top:16px">${cards}</div>` :
       `<div class="panel empty" style="margin-top:16px"><p><b>아직 분석한 영상이 없어요.</b></p>
-       <p class="muted">${state.me?.user.is_admin ? `위의 <b>새 레슨</b>에 유튜브 링크를 넣거나, 이 폴더에서 <code>sequenceguider analyze</code>를 실행하면 여기에 나타납니다.` : `관리자가 레슨을 올리면 여기에 나타나요.`}</p></div>`}
+       <p class="muted">${state.me?.user.is_admin ? `위의 <b>새 레슨</b>에 유튜브 링크를 넣거나, 이 폴더에서 <code>sequenceguider analyze</code>를 실행하면 여기에 나타납니다.` : `위의 <b>새 레슨</b>으로 수업 영상이나 녹음을 올리면 노트가 만들어져요. 내가 올린 건 나만 볼 수 있어요.`}</p></div>`}
   </main>`;
   const panel = $('#new-panel');
-  $('#new-btn').onclick = () => { panel.hidden = !panel.hidden; if (!panel.hidden) $('#nf-source').focus(); };
+  $('#new-btn').onclick = () => { panel.hidden = !panel.hidden; };
+  api('/api/usage').then(u => { if (u.limit && $('#nf-hint')) $('#nf-hint').dataset.usage = `이번 달 분석 ${u.used}/${u.limit}개 사용. `; kindChanged(); }).catch(() => {});
   const kindChanged = () => {
     const kind = $('#nf-kind').value;
     view.querySelectorAll('.analyze-only').forEach(el => el.hidden = kind !== 'analyze');
@@ -382,10 +388,10 @@ async function renderLibrary() {
     view.querySelectorAll('.none-only').forEach(el => el.hidden = kind !== 'none');
     view.querySelectorAll('.analysis-only').forEach(el => el.hidden = kind === 'none');
     $('#nf-hint').textContent = ({
-      notes: '말을 받아 적고(내 컴퓨터에서) Claude로 번역·정리합니다. 1시간 영상이면 받아쓰기만 수십 분 걸릴 수 있어요. 번역·정리에는 ANTHROPIC_API_KEY가 필요해요. ',
+      notes: '말을 받아 적고 원래 언어 자막과 한국어 번역, 핵심 정리를 만들어요. 1시간 영상이면 수십 분 걸리고, 앞 사람 분석이 있으면 차례를 기다려요. ',
       analyze: '분석은 몇 분 걸릴 수 있어요. ',
-      none: '파일은 그 자리에 둔 채 레슨에 올려요. 레슨 화면의 ＋ 영상·녹음으로 더 붙이고, 필요하면 나중에 분석할 수 있어요. ',
-    }[kind]) + '본인 영상이나 허락받은 영상만, 개인 학습용으로 사용하세요.';
+      none: '영상만 레슨에 올려 두고, 필요하면 나중에 분석할 수 있어요. ',
+    }[kind]) + ($('#nf-hint').dataset.usage || '') + '올린 영상과 노트는 나만 볼 수 있어요. 본인 영상이나 허락받은 영상만 올려 주세요.';
     $('#nf-submit').textContent = kind === 'none' ? '레슨 만들기' : '분석 시작';
     store.set('sg.newKind', $('#nf-kind').value);
   };
@@ -394,10 +400,23 @@ async function renderLibrary() {
   $('#new-form').onsubmit = async e => {
     e.preventDefault();
     $('#nf-error').textContent = '';
+    const opts = { sequence: $('#nf-seq').value, role: $('#nf-role').value, view: $('#nf-view').value,
+                   speakers: $('#nf-speakers').value, language: $('#nf-lang').value, title: $('#nf-title').value };
+    const file = $('#nf-file').files[0];
+    if (file) {
+      const bar = $('#nf-progress'), btn = $('#nf-submit');
+      bar.hidden = false; btn.disabled = true;
+      try {
+        const id = await uploadFile(file, f => { bar.firstElementChild.style.width = Math.round(100 * f) + '%'; });
+        const res = await api(`/api/uploads/${id}/finish`, { method: 'POST', body: { ...opts, analysis: $('#nf-kind').value } });
+        location.hash = `#/lesson/${encodeURIComponent(res.lesson)}`;
+      } catch (err) { $('#nf-error').textContent = err.message; }
+      finally { btn.disabled = false; bar.hidden = true; }
+      return;
+    }
+    if (!$('#nf-source').value.trim()) { $('#nf-error').textContent = '올릴 영상이나 녹음 파일을 골라 주세요'; return; }
     try {
-      const res = await api('/api/jobs', { method: 'POST', body: { kind: $('#nf-kind').value, source: $('#nf-source').value, sequence: $('#nf-seq').value,
-                                                         role: $('#nf-role').value, view: $('#nf-view').value, speakers: $('#nf-speakers').value,
-                                                         title: $('#nf-title').value } });
+      const res = await api('/api/jobs', { method: 'POST', body: { ...opts, kind: $('#nf-kind').value, source: $('#nf-source').value } });
       if (res.lesson) { location.hash = `#/lesson/${encodeURIComponent(res.lesson)}`; return; }  // nothing to analyse: open it
       $('#nf-source').value = ''; $('#nf-seq').value = '';
       pollJobs();
@@ -405,6 +424,29 @@ async function renderLibrary() {
   };
   await pollJobs(true);
   if (state.jobs.length) panel.hidden = false;
+}
+
+// a long video goes up in pieces (the tunnel refuses one request over 100 MB); a broken piece is retried
+async function uploadFile(file, onProgress) {
+  const up = await api('/api/uploads', { method: 'POST', body: { filename: file.name, size: file.size } });
+  let off = 0;
+  while (off < file.size) {
+    const end = Math.min(off + up.chunk_size, file.size);
+    for (let tries = 0; ; tries++) {
+      try {
+        const res = await fetch(`/api/uploads/${up.id}?offset=${off}`, { method: 'PUT', body: file.slice(off, end) });
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 409) { off = data.received; break; }  // the server has a different amount: carry on from there
+        if (!res.ok) throw Object.assign(new Error(data.error || res.statusText), { fatal: res.status < 500 });
+        off = data.received; break;
+      } catch (e) {
+        if (e.fatal || tries >= 4) throw e;
+        await new Promise(r => setTimeout(r, 2000 * (tries + 1)));
+      }
+    }
+    onProgress(off / file.size);
+  }
+  return up.id;
 }
 
 let jobTimer = null;
@@ -509,8 +551,8 @@ function renderMedia(lesson, item) {
     ${running ? `<div class="notice" style="margin-top:10px">${job.status === 'queued' ? `앞의 분석이 끝나길 기다리는 중(${job.position}번째)` : item.analysis === 'notes' ? '레슨 노트를 만드는 중' : '동작 분석 중'}이에요. 끝나면 여기에 결과가 나와요.${log}</div>`
       : item.analysis !== 'none' ? `<div class="notice" style="margin-top:10px">${job?.status === 'failed' ? '분석하지 못했어요.' : '분석 결과가 없어요 (중간에 멈췄을 수 있어요).'} 다시 분석할 수 있어요.${log}</div>` : ''}
     <div class="row" style="margin-top:12px">
-      ${running ? '' : `<button class="primary admin-only" id="mv-analyze">${item.analysis === 'none' ? '이 영상 분석하기' : '다시 분석'}</button>`}
-      <button class="link admin-only" id="mv-remove">레슨에서 빼기</button></div>
+      ${running ? '' : `<button class="primary" id="mv-analyze">${item.analysis === 'none' ? '이 영상 분석하기' : '다시 분석'}</button>`}
+      <button class="link" id="mv-remove">레슨에서 빼기</button></div>
   </div>`;
   $('#mv-analyze')?.addEventListener('click', () => openMediaDialog(item));
   $('#mv-remove').onclick = async () => {

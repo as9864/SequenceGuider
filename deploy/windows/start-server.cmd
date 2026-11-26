@@ -9,5 +9,5 @@ set PORT=8765
 cd /d "%REPO%"
 rem 127.0.0.1: only cloudflared on this PC reaches the server; the internet comes in through the tunnel
 uv run sequenceguider serve --home "%HOME_DIR%" --host 127.0.0.1 --port %PORT% ^
-  --behind-proxy --public-url %PUBLIC_URL% --signup invite --max-jobs 1 --no-open ^
+  --behind-proxy --public-url %PUBLIC_URL% --signup invite --max-jobs 1 --monthly-limit 4 --no-open ^
   >> "%HOME_DIR%\server.log" 2>&1
