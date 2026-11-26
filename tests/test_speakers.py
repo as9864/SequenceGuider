@@ -216,5 +216,5 @@ def test_notes_job_passes_speakers(tmp_path):
     jobs = Jobs(tmp_path / "home")
     jobs.command = ["python", "-c", "pass"]
     job = jobs.start(str(rec), kind="notes", speakers=SPEC)
-    args = job._proc.args
+    args = job.command
     assert args[args.index("--speakers") + 1] == SPEC

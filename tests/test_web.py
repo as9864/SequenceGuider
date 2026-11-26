@@ -165,7 +165,7 @@ def test_job_runs_analyze_and_finds_its_lesson(tmp_path):
     job = jobs.start(str(video), "오초")
     for _ in range(100):
         (d,) = jobs.list()
-        if d["status"] != "running":
+        if d["status"] not in ("queued", "running"):
             break
         time.sleep(0.05)
     assert d["status"] == "done" and d["lesson"] == "out_sequenceguider"
@@ -233,7 +233,7 @@ def test_media_analysis_goes_to_its_own_folder(tmp_path):
     job = app.analyze_media("l_sequenceguider", item["id"], "notes", speakers="A=남/en")
     for _ in range(100):
         (d,) = app.jobs.list()
-        if d["status"] != "running":
+        if d["status"] not in ("queued", "running"):
             break
         time.sleep(0.05)
     out = tmp_path.resolve() / "l_sequenceguider" / "media" / item["id"]
@@ -256,13 +256,13 @@ class TestAccounts:
 
     def test_sign_up_rules(self, tmp_path):
         from sequenceguider.accounts import Accounts
-        acc = Accounts(tmp_path / "r.db", signup_open=False)
+        acc = Accounts(tmp_path / "r.db", signup="closed")
         assert acc.can_sign_up()  # the first account, even with sign-up closed
         assert acc.sign_up("Han", "password123").is_admin
         assert not acc.can_sign_up()
         with pytest.raises(PermissionError):
             acc.sign_up("other", "password123")
-        acc.signup_open = True
+        acc.signup = "open"
         for name, pw, msg in [("han", "password123", "이미 있는"), ("a", "password123", "아이디는"),
                               ("ok_name", "short", "8자")]:
             with pytest.raises(ValueError, match=msg):
@@ -341,3 +341,156 @@ class TestWebAuth:
         body = {"minutes": 20, "figures": []}
         assert call(server, "/api/sessions", "POST", body, headers={"Origin": "https://evil.example"})[0] == 403
         assert call(server, "/api/sessions", "POST", body, headers={"Origin": server})[0] == 201
+
+
+def wait_jobs(jobs):
+    for _ in range(200):
+        out = jobs.list()
+        if all(d["status"] not in ("queued", "running") for d in out):
+            return out
+        time.sleep(0.05)
+    raise AssertionError(out)
+
+
+class TestJobQueue:
+    def test_one_at_a_time_in_order(self, tmp_path):
+        video = tmp_path / "v.mp4"
+        video.write_bytes(b"")
+        jobs = Jobs(tmp_path)  # max_parallel=1
+        jobs.command = [sys.executable, "-c", "import time; time.sleep(0.3); print('리포트: out_sequenceguider/index.html')"]
+        ids = [jobs.start(str(video), "오초").id for _ in range(3)]
+        listed = {d["id"]: d for d in jobs.list()}
+        assert [listed[i]["status"] for i in ids] == ["running", "queued", "queued"]
+        assert [listed[i]["position"] for i in ids] == [None, 1, 2]
+        # nobody looks at the list now: the queue still moves on its own
+        time.sleep(1.5)
+        out = wait_jobs(jobs)
+        assert {d["status"] for d in out} == {"done"}
+        started = [d["started_at"] for d in sorted(out, key=lambda d: ids.index(d["id"]))]
+        assert started == sorted(started)
+
+    def test_queue_survives_a_restart(self, tmp_path):
+        video = tmp_path / "v.mp4"
+        video.write_bytes(b"")
+        jobs = Jobs(tmp_path)
+        jobs.command = [sys.executable, "-c", "import time; time.sleep(5)"]
+        first = jobs.start(str(video), "오초")
+        second = jobs.start(str(video), "오초")
+        for p in jobs._procs.values():  # the server stops: its child process goes with it
+            p.kill()
+            p.wait()
+        jobs._procs.clear()
+        again = Jobs(tmp_path)
+        again.command = [sys.executable, "-c", "print('ok')"]  # (the stored command is what runs)
+        again.recover()
+        out = {d["id"]: d for d in wait_jobs(again)}
+        assert out[first.id]["status"] == "failed" and "다시 시작" in out[first.id]["log"]
+        assert out[second.id]["status"] in ("done", "failed")  # it ran: queued work isn't lost
+
+
+class TestInvitesAndLeaving:
+    def test_invite_only_sign_up(self, tmp_path):
+        from sequenceguider.accounts import Accounts
+        acc = Accounts(tmp_path / "r.db", signup="invite")
+        admin = acc.sign_up("admin", "password123")  # the first account needs no code
+        assert admin.is_admin and acc.needs_invite() and acc.can_sign_up()
+        with pytest.raises(ValueError, match="초대 코드"):
+            acc.sign_up("guest", "password123")
+        code = acc.create_invite(admin.id, "탱고 동호회 A")
+        assert len(code) == 14 and code.count("-") == 2
+        assert not acc.sign_up("guest", "password123", invite=code.lower().replace("-", " ")).is_admin
+        with pytest.raises(ValueError, match="이미 쓰였"):
+            acc.sign_up("guest2", "password123", invite=code)
+        (inv,) = acc.invites()
+        assert inv["used_by"] == "guest" and inv["note"] == "탱고 동호회 A"
+        assert acc.sign_up("byadmin", "password123", by_admin=True)  # `users add`
+
+    def test_delete_own_account(self, server):
+        status, headers, _ = call(server, "/api/auth/signup", "POST",
+                                  {"username": "leaver", "password": "password123"}, auth=False)
+        me = {"Cookie": login_cookie(headers)}
+        call(server, "/api/sessions", "POST", {"minutes": 20, "figures": []}, headers=me)
+        assert call(server, "/api/auth/me", "DELETE", {"password": "wrong"}, headers=me)[0] == 400
+        status, headers, _ = call(server, "/api/auth/me", "DELETE", {"password": "password123"}, headers=me)
+        assert status == 200 and "Max-Age=0" in headers["Set-Cookie"]
+        assert call(server, "/api/sessions", headers=me)[0] == 401
+        assert call(server, "/api/auth/login", "POST", {"username": "leaver", "password": "password123"},
+                    auth=False)[0] == 400
+        # the only admin can't leave while others need someone to run the server
+        call(server, "/api/auth/signup", "POST", {"username": "stays", "password": "password123"}, auth=False)
+        status, _, body = call(server, "/api/auth/me", "DELETE", {"password": "password123"})
+        assert status == 403 and "마지막 관리자" in json.loads(body)["error"]
+
+    def test_last_admin_stays(self, tmp_path):
+        from sequenceguider.accounts import Accounts
+        acc = Accounts(tmp_path / "r.db")
+        admin = acc.sign_up("admin", "password123")
+        acc.sign_up("member", "password123")
+        with pytest.raises(PermissionError, match="마지막 관리자"):
+            acc.delete_user(admin.id, "password123")
+        acc.set_admin("member", True)
+        acc.delete_user(admin.id, "password123")
+        assert [u.username for u in acc.users()] == ["member"]
+
+    def test_invites_api_is_admin_only(self, server):
+        status, _, body = call(server, "/api/invites", "POST", {"note": "x"})
+        assert status == 201 and len(json.loads(body)["code"]) == 14
+        assert len(json.loads(call(server, "/api/invites")[2])) == 1
+        _, headers, _ = call(server, "/api/auth/signup", "POST", {"username": "m1", "password": "password123"},
+                             auth=False)
+        member = {"Cookie": login_cookie(headers)}
+        assert call(server, "/api/invites", "POST", {}, headers=member)[0] == 403
+        assert call(server, "/api/invites", headers=member)[0] == 403
+
+
+class TestBehindTunnel:
+    @pytest.fixture
+    def tunneled(self, home):
+        srv = make_server(home, port=0, trust_proxy=True)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{srv.server_address[1]}"
+        log_in_admin(base)
+        yield base, srv.app
+        srv.shutdown()
+        srv.server_close()
+
+    def test_security_headers_and_health(self, server):
+        status, headers, body = call(server, "/healthz", auth=False)
+        assert status == 200 and json.loads(body) == {"ok": True}
+        assert headers["X-Content-Type-Options"] == "nosniff" and headers["X-Frame-Options"] == "SAMEORIGIN"
+        assert "Strict-Transport-Security" not in headers  # plain http on the LAN
+
+    def test_https_through_the_tunnel(self, tunneled):
+        base, _ = tunneled
+        via = {"X-Forwarded-Proto": "https", "CF-Connecting-IP": "203.0.113.9", "Host": "tango.example.com",
+               "Origin": "https://tango.example.com"}
+        status, headers, _ = call(base, "/api/auth/login", "POST", {"username": "admin", "password": "password123"},
+                                  headers=via, auth=False)
+        assert status == 200 and "; Secure" in headers["Set-Cookie"]
+        assert "max-age" in headers["Strict-Transport-Security"]
+
+    def test_wrong_passwords_count_per_visitor(self, tunneled):
+        base, _ = tunneled
+        for _ in range(10):
+            call(base, "/api/auth/login", "POST", {"username": "admin", "password": "nope"},
+                 headers={"CF-Connecting-IP": "203.0.113.9"}, auth=False)
+        locked = call(base, "/api/auth/login", "POST", {"username": "admin", "password": "password123"},
+                      headers={"CF-Connecting-IP": "203.0.113.9"}, auth=False)
+        assert locked[0] == 403
+        # another visitor through the same tunnel isn't locked out
+        assert call(base, "/api/auth/login", "POST", {"username": "admin", "password": "password123"},
+                    headers={"CF-Connecting-IP": "198.51.100.7"}, auth=False)[0] == 200
+
+    def test_headers_ignored_without_a_proxy(self, server):
+        status, headers, _ = call(server, "/api/auth/login", "POST", {"username": "admin", "password": "password123"},
+                                  headers={"X-Forwarded-Proto": "https"}, auth=False)
+        assert status == 200 and "Secure" not in headers["Set-Cookie"]
+
+
+def test_backup_is_a_working_copy(tmp_path):
+    from sequenceguider.accounts import Accounts
+    from sequenceguider.db import backup
+    acc = Accounts(tmp_path / "records.db")
+    acc.sign_up("han", "password123")
+    copy = backup(tmp_path / "records.db", tmp_path / "b" / "records-1.db")
+    assert [u.username for u in Accounts(copy).users()] == ["han"]

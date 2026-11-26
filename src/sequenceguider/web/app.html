@@ -56,6 +56,7 @@ h1 { font-size: 1.4rem; margin: 0 0 12px; } h2 { font-size: 1.1rem; margin: 26px
 .timer { font-variant-numeric: tabular-nums; font-weight: 700; }
 iframe.report { width: 100%; border: 0; display: block; height: calc(100vh - 110px); }
 /* records */
+.account hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
 .stats { display:grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
 @media (max-width: 700px) { .stats { grid-template-columns: repeat(2, 1fr); } }
 .stat .n { font-size: 1.7rem; font-weight: 800; font-variant-numeric: tabular-nums; }
@@ -255,6 +256,8 @@ async function renderAuth(mode) {
       <input id="au-user" autocomplete="username" required minlength="2" maxlength="32">
       ${mode === 'signup' ? `<label class="field" for="au-name">이름 <span class="muted small">(비우면 아이디)</span></label>
         <input id="au-name" autocomplete="nickname" maxlength="40">` : ''}
+      ${mode === 'signup' && info.needs_invite ? `<label class="field" for="au-invite">초대 코드 <span class="muted small">(관리자에게 받은 코드)</span></label>
+        <input id="au-invite" autocomplete="off" required placeholder="ABCD-EFGH-JKLM" maxlength="20">` : ''}
       <label class="field" for="au-pass">비밀번호${mode === 'signup' ? ' <span class="muted small">(8자 이상)</span>' : ''}</label>
       <input id="au-pass" type="password" autocomplete="${mode === 'signup' ? 'new-password' : 'current-password'}" required ${mode === 'signup' ? 'minlength="8"' : ''}>
       <div class="error" id="au-error"></div>
@@ -265,7 +268,8 @@ async function renderAuth(mode) {
   $('#au-user').focus();
   $('#auth-form').onsubmit = async e => {
     e.preventDefault();
-    const body = { username: $('#au-user').value, password: $('#au-pass').value, display_name: $('#au-name')?.value || '' };
+    const body = { username: $('#au-user').value, password: $('#au-pass').value, display_name: $('#au-name')?.value || '',
+                   invite: $('#au-invite')?.value || '' };
     try {
       await api('/api/auth/' + (mode === 'signup' ? 'signup' : 'login'), { method: 'POST', body });
       state.me = null; route();
@@ -404,17 +408,20 @@ async function renderLibrary() {
 }
 
 let jobTimer = null;
+const jobActive = j => j.status === 'running' || j.status === 'queued';
+const jobLabel = j => j.status === 'queued' ? `차례 기다리는 중 (${j.position}번째)`
+  : {running: j.kind === 'notes' ? '노트 만드는 중' : '분석 중', done: '완료', failed: '실패'}[j.status];
 async function pollJobs(once) {
   clearTimeout(jobTimer);
   if (!$('#jobs')) return;
-  const before = state.jobs.filter(j => j.status === 'running').length;
+  const before = state.jobs.filter(jobActive).length;
   state.jobs = await api('/api/jobs');
-  const running = state.jobs.filter(j => j.status === 'running').length;
+  const running = state.jobs.filter(jobActive).length;
   $('#jobs').innerHTML = state.jobs.map(j => `<div class="job">
-    <div class="row"><span class="badge ${j.status}">${{running: j.kind === 'notes' ? '노트 만드는 중' : '분석 중', done: '완료', failed: '실패'}[j.status]}</span>
+    <div class="row"><span class="badge ${j.status}">${jobLabel(j)}</span>
       <span class="small" style="word-break:break-all">${esc(j.source)}</span>
       ${j.lesson ? `<a class="small" href="#/lesson/${encodeURIComponent(j.lesson)}${j.media ? '/m/' + j.media : ''}">열기 →</a>` : ''}</div>
-    <pre>${esc(j.log.split('\n').slice(-6).join('\n') || '시작하는 중...')}</pre></div>`).join('');
+    <pre>${esc(j.log.split('\n').slice(-6).join('\n') || (j.status === 'queued' ? '앞의 분석이 끝나면 시작해요.' : '시작하는 중...'))}</pre></div>`).join('');
   if (before && running < before) { await load(); if (location.hash === '' || location.hash === '#/') return renderLibrary(); }
   if (running) jobTimer = setTimeout(pollJobs, 2000);
 }
@@ -447,6 +454,7 @@ function renderLessonBar() {
 const mediaJob = m => state.jobs.find(j => j.lesson === currentLesson?.id && j.media === m.id);  // newest first
 function mediaStatus(m) {
   const job = mediaJob(m);
+  if (job?.status === 'queued') return '분석 대기';
   if (job?.status === 'running') return '분석 중';
   if (m.has_notes) return '노트';
   if (m.has_guide) return '동작 분석';
@@ -490,7 +498,7 @@ function renderMedia(lesson, item) {
     return;
   }
   const src = `/lessons/${lid}/media-file/${item.id}`, ytId = item.media === 'youtube' && youtubeId(item.source);
-  const job = mediaJob(item), running = job?.status === 'running';
+  const job = mediaJob(item), running = !!job && jobActive(job);
   const log = job ? `<pre class="small" style="white-space:pre-wrap">${esc(job.log.split('\n').slice(-6).join('\n') || '시작하는 중...')}</pre>` : '';
   view.innerHTML = `<div class="mv">
     ${item.media === 'audio' ? `<audio controls preload="metadata" src="${src}"></audio>`
@@ -498,7 +506,7 @@ function renderMedia(lesson, item) {
       : `<video controls preload="metadata" playsinline src="${src}"></video>`}
     <h1>${esc(item.title)}</h1>
     <div class="small muted" style="word-break:break-all">${esc(item.source)}</div>
-    ${running ? `<div class="notice" style="margin-top:10px">${item.analysis === 'notes' ? '레슨 노트를 만드는 중' : '동작 분석 중'}이에요. 끝나면 여기에 결과가 나와요.${log}</div>`
+    ${running ? `<div class="notice" style="margin-top:10px">${job.status === 'queued' ? `앞의 분석이 끝나길 기다리는 중(${job.position}번째)` : item.analysis === 'notes' ? '레슨 노트를 만드는 중' : '동작 분석 중'}이에요. 끝나면 여기에 결과가 나와요.${log}</div>`
       : item.analysis !== 'none' ? `<div class="notice" style="margin-top:10px">${job?.status === 'failed' ? '분석하지 못했어요.' : '분석 결과가 없어요 (중간에 멈췄을 수 있어요).'} 다시 분석할 수 있어요.${log}</div>` : ''}
     <div class="row" style="margin-top:12px">
       ${running ? '' : `<button class="primary admin-only" id="mv-analyze">${item.analysis === 'none' ? '이 영상 분석하기' : '다시 분석'}</button>`}
@@ -514,7 +522,7 @@ function renderMedia(lesson, item) {
   if (running) mediaTimer = setTimeout(async function poll() {  // show the result once the analysis is done
     if (currentMedia !== item.id) return;
     state.jobs = await api('/api/jobs').catch(() => state.jobs);
-    if (mediaJob(item)?.status === 'running') { mediaTimer = setTimeout(poll, 3000); return; }
+    if (mediaJob(item) && jobActive(mediaJob(item))) { mediaTimer = setTimeout(poll, 3000); return; }
     route();
   }, 3000);
 }
@@ -852,7 +860,32 @@ function renderRecords() {
     <h2>연습 일지</h2>
     ${sessionRows ? `<div class="panel table-wrap"><table><thead><tr><th>날짜</th><th>시간</th><th>레슨 · 피구라</th><th>메모</th><th></th></tr></thead><tbody>${sessionRows}</tbody></table></div>`
                   : `<div class="panel empty muted">레슨 화면에서 <b>연습 시작</b>이나 <b>기록 남기기</b>를 누르면 여기에 기록돼요.</div>`}
+    <h2>계정</h2>
+    <div class="panel account">
+      ${state.me.user.is_admin ? `<div class="row between"><div><b>초대 코드</b><div class="small muted">코드 하나로 한 명이 가입해요. 14일 안에 써야 해요.</div></div>
+        <button id="inv-make">초대 코드 만들기</button></div><div id="inv-out" class="small" style="margin-top:6px"></div><hr>` : ''}
+      <div class="row between"><div><b>탈퇴하기</b><div class="small muted">계정과 체크·연습 기록이 모두 지워지고 되돌릴 수 없어요. 먼저 기록을 내보내 두세요.</div></div>
+        <button class="link" id="leave-open">탈퇴</button></div>
+      <form id="leave-form" hidden style="margin-top:10px">
+        <label class="field" for="leave-pass">비밀번호를 넣으면 바로 탈퇴돼요</label>
+        <input id="leave-pass" type="password" autocomplete="current-password" required>
+        <div class="error" id="leave-error"></div>
+        <div class="row" style="justify-content:flex-end; margin-top: 10px"><button class="primary">계정 지우기</button></div>
+      </form>
+    </div>
   </main>`;
+  if ($('#inv-make')) $('#inv-make').onclick = async () => {
+    try { const { code } = await api('/api/invites', { method: 'POST', body: {} });
+      $('#inv-out').innerHTML = `새 코드: <b class="num">${esc(code)}</b> <span class="muted">(지금만 보여요. 복사해서 전해 주세요)</span>`;
+    } catch (err) { $('#inv-out').textContent = err.message; }
+  };
+  $('#leave-open').onclick = () => { $('#leave-form').hidden = false; $('#leave-pass').focus(); };
+  $('#leave-form').onsubmit = async e => {
+    e.preventDefault();
+    try { await api('/api/auth/me', { method: 'DELETE', body: { password: $('#leave-pass').value } });
+      state.me = null; location.hash = '#/'; renderAuth(); toast('탈퇴했어요');
+    } catch (err) { $('#leave-error').textContent = err.message; }
+  };
   const heat = $('.heat'); heat.scrollLeft = heat.scrollWidth;  // newest weeks in view on a phone
   view.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
     if (!confirm('이 연습 기록을 지울까요?')) return;
