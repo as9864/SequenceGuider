@@ -239,8 +239,10 @@ class Jobs:
 
 
 class App:
-    def __init__(self, home: Path, signup_open: bool = True):
+    def __init__(self, home: Path, signup_open: bool = True, public: bool = False):
         self.home = home.resolve()
+        # public: reached from the internet through a Cloudflare Tunnel (HTTPS), see `serve --public`
+        self.public = public
         self.home.mkdir(parents=True, exist_ok=True)
         self.records = Records(self.home / "records.db")
         self.accounts = Accounts(self.home / "records.db", signup_open)
@@ -365,6 +367,14 @@ def make_handler(app: App):
 
         # -- helpers ------------------------------------------------------
 
+        def end_headers(self):
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "SAMEORIGIN")
+            self.send_header("Referrer-Policy", "same-origin")
+            if app.public:
+                self.send_header("Strict-Transport-Security", "max-age=31536000")
+            super().end_headers()
+
         def _json(self, data, status: int = 200, cookie: str | None = None) -> None:
             body = json.dumps(data, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
@@ -386,10 +396,24 @@ def make_handler(app: App):
                 return None
             return morsel.value if morsel else None
 
-        @staticmethod
-        def _cookie(token: str, max_age: int) -> str:
-            # HttpOnly: page scripts can't read it; SameSite=Lax: other sites can't post with it
-            return f"{COOKIE}={token}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Lax"
+        def _cookie(self, token: str, max_age: int) -> str:
+            # HttpOnly: page scripts can't read it; SameSite=Lax: other sites can't post with it;
+            # Secure (public): only ever sent over the tunnel's HTTPS
+            secure = "; Secure" if app.public else ""
+            return f"{COOKIE}={token}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Lax{secure}"
+
+        def _from_tunnel(self) -> bool:
+            """Cloudflare adds CF-Connecting-IP to everything it forwards; a browser on this PC has none."""
+            return app.public and bool(self.headers.get("CF-Connecting-IP"))
+
+        def _client(self) -> str:
+            # behind the tunnel every connection comes from 127.0.0.1, so take the visitor's address from Cloudflare
+            return self.headers.get("CF-Connecting-IP", "") if self._from_tunnel() else self.client_address[0]
+
+        def _local_source(self, b: dict) -> None:
+            """From the internet only web links: a file path would let an admin login read any file on this PC."""
+            if self._from_tunnel() and not re.match(r'^\s*"?https?://', str(b.get("source", "")), re.IGNORECASE):
+                raise PermissionError("밖에서는 유튜브 같은 링크만 추가할 수 있어요. 이 PC의 파일은 PC에서 직접 추가해 주세요")
 
         def _same_origin(self) -> bool:
             """A browser sends Origin on POST/PUT/DELETE; it must be this server (no cross-site requests)."""
@@ -493,6 +517,7 @@ def make_handler(app: App):
                     return self._json(app.jobs.list() if user.is_admin else [])
                 if (m := re.fullmatch(r"/api/lessons/([^/]+)/media", path)) and method == "POST":
                     b = self._body()
+                    self._local_source(b)
                     item = app.add_media(m.group(1), str(b.get("source", "")), str(b.get("title", "")),
                                          str(b.get("analysis", "none")), **_analysis_opts(b))
                     return self._json(item, 201)
@@ -505,6 +530,7 @@ def make_handler(app: App):
                     return self._json({"deleted": ok}, 200 if ok else 404)
                 if path == "/api/jobs" and method == "POST":
                     b = self._body()
+                    self._local_source(b)
                     if b.get("kind") == "none":  # just keep the video on a new lesson, analyse nothing
                         lesson = app.create_lesson(str(b.get("source", "")), str(b.get("title", "")))
                         return self._json({"lesson": lesson}, 201)
@@ -533,7 +559,7 @@ def make_handler(app: App):
             if action == "login" and method == "POST":
                 b = self._body()
                 user, token = app.accounts.log_in(str(b.get("username", "")), str(b.get("password", "")),
-                                                  self.client_address[0])
+                                                  self._client())
                 return self._json({"user": user.public()}, 200, self._cookie(token, SESSION_DAYS * 86400))
             if action == "logout" and method == "POST":
                 app.accounts.log_out(self._token())
@@ -555,8 +581,12 @@ def make_handler(app: App):
     return Handler
 
 
-def make_server(home: Path, host: str = "127.0.0.1", port: int = 8765, signup_open: bool = True) -> ThreadingHTTPServer:
-    app = App(home, signup_open)
-    server = ThreadingHTTPServer((host, port), make_handler(app))
+def make_server(home: Path, host: str = "127.0.0.1", port: int = 8765, signup_open: bool = True,
+                public: bool = False) -> ThreadingHTTPServer:
+    app = App(home, signup_open, public)
+    handler = make_handler(app)
+    handler.timeout = 60  # a connection that sends nothing for a minute is dropped
+    server = ThreadingHTTPServer((host, port), handler)
+    server.daemon_threads = True
     server.app = app
     return server

@@ -341,3 +341,45 @@ class TestWebAuth:
         body = {"minutes": 20, "figures": []}
         assert call(server, "/api/sessions", "POST", body, headers={"Origin": "https://evil.example"})[0] == 403
         assert call(server, "/api/sessions", "POST", body, headers={"Origin": server})[0] == 201
+
+
+class TestPublic:
+    """`serve --public`: behind a Cloudflare Tunnel, which adds CF-Connecting-IP to every request."""
+
+    @pytest.fixture
+    def public(self, home):
+        srv = make_server(home, port=0, public=True)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{srv.server_address[1]}"
+        log_in_admin(base)
+        yield base
+        srv.shutdown()
+        srv.server_close()
+
+    def test_secure_cookie_and_headers(self, public):
+        status, headers, _ = call(public, "/api/auth/login", "POST",
+                                  {"username": "admin", "password": "password123"}, auth=False)
+        assert status == 200 and "Secure" in headers["Set-Cookie"]
+        assert headers["Strict-Transport-Security"] and headers["X-Content-Type-Options"] == "nosniff"
+
+    def test_not_public_has_no_secure_cookie(self, server):
+        status, headers, _ = call(server, "/api/auth/login", "POST",
+                                  {"username": "admin", "password": "password123"}, auth=False)
+        assert "Secure" not in headers["Set-Cookie"] and "Strict-Transport-Security" not in headers
+
+    def test_no_local_paths_from_the_internet(self, public, home):
+        tunnel = {"CF-Connecting-IP": "203.0.113.5"}
+        video = str(home / "lesson1_sequenceguider" / "notes.json")
+        assert call(public, "/api/jobs", "POST", {"source": video, "kind": "none"}, headers=tunnel)[0] == 403
+        assert call(public, "/api/lessons/lesson1_sequenceguider/media", "POST", {"source": video},
+                    headers=tunnel)[0] == 403
+
+    def test_wrong_passwords_counted_per_visitor(self, public):
+        bad = {"username": "admin", "password": "nope"}
+        for _ in range(10):
+            call(public, "/api/auth/login", "POST", bad, headers={"CF-Connecting-IP": "203.0.113.5"}, auth=False)
+        locked = call(public, "/api/auth/login", "POST", bad, headers={"CF-Connecting-IP": "203.0.113.5"}, auth=False)
+        assert locked[0] == 403
+        other = call(public, "/api/auth/login", "POST", {"username": "admin", "password": "password123"},
+                     headers={"CF-Connecting-IP": "198.51.100.7"}, auth=False)
+        assert other[0] == 200

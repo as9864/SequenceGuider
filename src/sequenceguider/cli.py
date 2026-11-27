@@ -480,8 +480,12 @@ def serve(
     home: Path = typer.Option(Path("."), help="분석 결과(<이름>_sequenceguider/)와 계정·연습 기록을 두는 폴더"),
     port: int = typer.Option(8765, help="포트"),
     host: str = typer.Option("127.0.0.1", help="접속 주소. 같은 와이파이의 휴대폰·다른 PC에서 열려면 0.0.0.0"),
-    signup: bool = typer.Option(True, "--signup/--no-signup",
-                                help="새 가입 받기. 끄면 첫 계정(관리자)만 만들 수 있고, 나머지는 `users add`로"),
+    signup: bool | None = typer.Option(None, "--signup/--no-signup",
+                                       help="새 가입 받기. 끄면 첫 계정(관리자)만 만들 수 있고, 나머지는 `users add`로. "
+                                            "기본: 켜짐, --public이면 꺼짐"),
+    public: bool = typer.Option(False, "--public",
+                                help="Cloudflare Tunnel로 인터넷에 공개할 때. 127.0.0.1에서만 받고, 쿠키는 HTTPS 전용, "
+                                     "밖에서는 PC 파일 경로를 못 넣고, 계정이 하나도 없으면 시작하지 않아요"),
     open_browser: bool = typer.Option(True, "--open/--no-open", help="브라우저 자동으로 열기"),
 ) -> None:
     """웹 화면: 로그인해서 분석한 영상으로 배우고, 연습 기록을 남기고, 새 영상을 분석."""
@@ -490,7 +494,18 @@ def serve(
 
     from sequenceguider.web import make_server
 
-    server = make_server(home, host, port, signup_open=signup)
+    if public:
+        if host != "127.0.0.1":
+            typer.echo("--public은 127.0.0.1에서만 받아요 (밖에서는 터널로만 들어오게). --host는 빼 주세요", err=True)
+            raise typer.Exit(1)
+        from sequenceguider.accounts import Accounts
+
+        if Accounts(home.resolve() / "records.db").count() == 0:
+            # otherwise the first stranger to open the address would sign up and become admin
+            typer.echo("공개하기 전에 관리자 계정을 먼저 만드세요 (첫 계정이 관리자): sequenceguider users add <아이디> --home "
+                       + str(home), err=True)
+            raise typer.Exit(1)
+    server = make_server(home, host, port, signup_open=not public if signup is None else signup, public=public)
     url = f"http://{'127.0.0.1' if host == '0.0.0.0' else host}:{server.server_address[1]}/"
     typer.echo(f"SequenceGuider 웹: {url}  (폴더: {home.resolve()}, 끄려면 Ctrl+C)")
     if host == "0.0.0.0":

@@ -150,7 +150,7 @@ uv run sequenceguider users admin 아이디 --home ~/tango     # 관리자로 (m
 ```
 
 - `--host 0.0.0.0`으로 처음 켜면 Windows 방화벽이 허용할지 묻습니다. **개인 네트워크**만 허용하세요
-- http(암호화 없음)라 집·연습실 같은 믿을 수 있는 네트워크에서만 쓰세요. 인터넷에 공개하려면 HTTPS(터널이나 리버스 프록시)를 앞에 두는 게 먼저입니다
+- http(암호화 없음)라 집·연습실 같은 믿을 수 있는 네트워크에서만 쓰세요. 밖에서 열려면 포트포워딩 대신 Cloudflare Tunnel + `serve --public`: [docs/public-access.md](docs/public-access.md)
 
 ### 옵션
 
