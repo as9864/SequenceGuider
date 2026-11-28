@@ -114,6 +114,14 @@ class TestImport:
         with pytest.raises(ValueError):
             notion.import_export(tmp_path, empty)
 
+    def test_table_only_export_says_what_to_do(self, tmp_path):
+        z = tmp_path / "Tango Note.zip"  # exported without "Include subpages": just the CSVs
+        with zipfile.ZipFile(z, "w") as zf:
+            zf.writestr("Tango Note 211f7c600996800cb6d2c650c34337e8.csv", "\ufeff이름,사람\n깔리토스,\n")
+            zf.writestr("Tango Note 211f7c600996800cb6d2c650c34337e8_all.csv", "\ufeff이름,사람\n깔리토스,\n")
+        with pytest.raises(ValueError, match="하위 페이지 포함"):
+            notion.import_export(tmp_path, z)
+
     def test_dry_run_writes_nothing(self, tmp_path, export):
         home = tmp_path / "home"
         home.mkdir()

@@ -416,6 +416,8 @@ def import_export(home: Path, src: Path, *, dry_run: bool = False, work: Path | 
     try:
         root = open_export(src, work).resolve()
         rows = read_export(root)
+        if not rows and any(root.rglob("*.csv")):
+            raise ValueError("표(CSV)만 있고 페이지 내용(.md)이 없어요. 노션에서 내보낼 때 '하위 페이지 포함'을 켜고 다시 받아 주세요")
         if not rows:
             raise ValueError("내보낸 파일에서 노션 페이지(.md)를 찾지 못했어요. 내보내기 형식을 'Markdown & CSV'로 골랐는지 확인해 주세요")
         return _write_all(home, root, rows, dry_run)

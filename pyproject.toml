@@ -1,7 +1,7 @@
 [project]
 name = "sequenceguider"
 version = "0.1.0"
-description = "Tango sequence coach — split a practice video into its figures and explain what to watch for in each"
+description = "TangoLibrary: tango lesson library — split a practice video into its figures and explain what to watch for in each"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
@@ -27,7 +27,8 @@ gpu = [
 ]
 
 [project.scripts]
-sequenceguider = "sequenceguider.cli:app"
+tangolibrary = "sequenceguider.cli:app"
+sequenceguider = "sequenceguider.cli:app"  # old name, kept so existing scripts keep working
 
 [build-system]
 requires = ["hatchling"]

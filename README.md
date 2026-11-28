@@ -1,4 +1,7 @@
-# SequenceGuider (`sequenceguider`)
+# TangoLibrary (`tangolibrary`)
+
+> 이전 이름은 SequenceGuider예요. 명령은 `tangolibrary`로 바뀌었고, 예전 `sequenceguider` 명령도 그대로 동작합니다.
+> 웹 앱(`tangolibrary serve`)에는 홈, 배우기(레슨 목록), 기록, 소개 페이지가 있습니다.
 
 탱고 연습 영상(파일 또는 유튜브 링크)과 **시퀀스 순서**를 주면, 영상을 피구라별 구간으로 나누고 각 피구라에서
 **주의할 점**과 **자동 자세 체크 결과**를 정리한 학습 가이드(HTML)를 만들어 줍니다.
@@ -11,20 +14,20 @@
 
 ```bash
 uv sync
-uv run sequenceguider analyze 연습영상.mp4 -s "살리다, 오초 아뜨라스 x3, 뿌에라 에헤"
+uv run tangolibrary analyze 연습영상.mp4 -s "살리다, 오초 아뜨라스 x3, 뿌에라 에헤"
 # → 연습영상_sequenceguider/index.html 을 브라우저로 열기
 ```
 
 - 첫 실행 시 MediaPipe 포즈 모델(~9MB)을 `~/.cache/sequenceguider/`에 받습니다. GPU 없이 CPU로 동작합니다
-- 영상 없이 주의점만 보고 싶으면: `uv run sequenceguider guide "살리다, 오초 아뜨라스, 푸에라 데 에헤"`
-- 알아듣는 피구라 이름 목록: `uv run sequenceguider figures`
+- 영상 없이 주의점만 보고 싶으면: `uv run tangolibrary guide "살리다, 오초 아뜨라스, 푸에라 데 에헤"`
+- 알아듣는 피구라 이름 목록: `uv run tangolibrary figures`
 
 ### 유튜브 링크로 분석하기
 
 ```bash
-uv run sequenceguider preview "https://youtu.be/XXXXXXXXXXX"      # 링크에서 읽은 시퀀스 미리 보기 (영상 다운로드 안 함)
-uv run sequenceguider analyze "https://youtu.be/XXXXXXXXXXX"      # 챕터/설명란/자막에서 순서를 읽어 바로 분석
-uv run sequenceguider analyze "https://youtu.be/XXXXXXXXXXX" -s "살리다, 오초 아뜨라스 x3"   # 순서 직접 지정
+uv run tangolibrary preview "https://youtu.be/XXXXXXXXXXX"      # 링크에서 읽은 시퀀스 미리 보기 (영상 다운로드 안 함)
+uv run tangolibrary analyze "https://youtu.be/XXXXXXXXXXX"      # 챕터/설명란/자막에서 순서를 읽어 바로 분석
+uv run tangolibrary analyze "https://youtu.be/XXXXXXXXXXX" -s "살리다, 오초 아뜨라스 x3"   # 순서 직접 지정
 ```
 
 - 탱고 수업 영상은 **챕터**나 **설명란 타임스탬프**("0:45 오초 아뜨라스")에 순서가 적혀 있는 경우가 많습니다.
@@ -48,10 +51,10 @@ uv run sequenceguider analyze "https://youtu.be/XXXXXXXXXXX" -s "살리다, 오�
 유튜브 AI 요약처럼 순서가 문장으로 적힌 글을 그대로 넣으면 피구라 이름과 순서를 뽑아냅니다. 파일 영상에도 됩니다.
 
 ```bash
-uv run sequenceguider preview --summary 요약.txt                         # 뽑은 순서 확인 (-s 문자열 출력)
-uv run sequenceguider preview --summary -                                # 붙여넣고 Ctrl-D (Windows: Ctrl-Z 후 Enter)
-uv run sequenceguider analyze "https://youtu.be/XXXXXXXXXXX" --summary 요약.txt
-uv run sequenceguider analyze 연습영상.mp4 --summary "살리다로 시작해 오초 아뜨라스를 세 번, 마지막은 볼레오"
+uv run tangolibrary preview --summary 요약.txt                         # 뽑은 순서 확인 (-s 문자열 출력)
+uv run tangolibrary preview --summary -                                # 붙여넣고 Ctrl-D (Windows: Ctrl-Z 후 Enter)
+uv run tangolibrary analyze "https://youtu.be/XXXXXXXXXXX" --summary 요약.txt
+uv run tangolibrary analyze 연습영상.mp4 --summary "살리다로 시작해 오초 아뜨라스를 세 번, 마지막은 볼레오"
 ```
 
 - 값은 파일 경로, 글 자체, `-`(붙여넣기) 중 아무거나 됩니다
@@ -70,10 +73,10 @@ uv run sequenceguider analyze 연습영상.mp4 --summary "살리다로 시작해
 ```bash
 uv sync --extra notes                                   # 처음 한 번: 음성 인식(faster-whisper) + Claude API 패키지
 export ANTHROPIC_API_KEY=sk-ant-...                      # 번역·핵심 정리에 필요 (받아쓰기만은 없어도 됨)
-uv run sequenceguider notes "0915 개인레슨.mp4"            # 파일
-uv run sequenceguider notes "https://youtu.be/XXXXXXXXXXX" # 유튜브 링크 (소리만 받습니다)
-uv run sequenceguider notes 레슨.mp4 --role follower       # 팔로워 관점으로 정리
-uv run sequenceguider notes 워크숍.m4a --speakers "남자 강사=남/en, 여자 강사=여/en, 통역=남/ko"   # 녹음 파일 + 화자 구분
+uv run tangolibrary notes "0915 개인레슨.mp4"            # 파일
+uv run tangolibrary notes "https://youtu.be/XXXXXXXXXXX" # 유튜브 링크 (소리만 받습니다)
+uv run tangolibrary notes 레슨.mp4 --role follower       # 팔로워 관점으로 정리
+uv run tangolibrary notes 워크숍.m4a --speakers "남자 강사=남/en, 여자 강사=여/en, 통역=남/ko"   # 녹음 파일 + 화자 구분
 ```
 
 1. **받아쓰기** — 내 컴퓨터에서 Whisper(`--whisper turbo`, 첫 실행 시 모델 ~1.6GB 다운로드)로 말을 시간과 함께 받아 적습니다.
@@ -128,9 +131,9 @@ data/새 레슨/
 ```
 
 ```bash
-uv run sequenceguider batch "data/새 레슨" --home data --dry-run   # 할 일만 확인
-uv run sequenceguider batch "data/새 레슨" --home data             # 파일마다 차례로 노트 만들기
-uv run sequenceguider batch "data/새 레슨" --home data --speakers "선생님=en, 통역=ko"   # 모든 폴더 같은 화자
+uv run tangolibrary batch "data/새 레슨" --home data --dry-run   # 할 일만 확인
+uv run tangolibrary batch "data/새 레슨" --home data             # 파일마다 차례로 노트 만들기
+uv run tangolibrary batch "data/새 레슨" --home data --speakers "선생님=en, 통역=ko"   # 모든 폴더 같은 화자
 ```
 
 - 레슨은 `data/<폴더 이름>_sequenceguider/`에 생기고, 원본 파일은 그 자리에 둔 채 가리킵니다
@@ -161,8 +164,8 @@ uv run sequenceguider import-notion Export-xxxx.zip --home data
 ### 웹 화면으로 배우고 기록하기
 
 ```bash
-uv run sequenceguider serve                  # 현재 폴더를 홈으로, 브라우저가 열립니다 (http://127.0.0.1:8765)
-uv run sequenceguider serve --home ~/tango   # 분석 결과와 기록을 둘 폴더 지정
+uv run tangolibrary serve                  # 현재 폴더를 홈으로, 브라우저가 열립니다 (http://127.0.0.1:8765)
+uv run tangolibrary serve --home ~/tango   # 분석 결과와 기록을 둘 폴더 지정
 ```
 
 - **배우기**: 홈 폴더의 분석 결과(`<이름>_sequenceguider/`)가 레슨 카드로 보입니다. 카드마다 체크리스트 진도와 마지막 연습 날짜.
