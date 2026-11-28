@@ -1,4 +1,4 @@
-"""sequenceguider — tango sequence coach CLI."""
+"""TangoLibrary CLI (`tangolibrary`, also installed under its old name `sequenceguider`)."""
 
 import shutil
 import sys
@@ -11,7 +11,7 @@ for _stream in (sys.stdout, sys.stderr):
     if _stream.encoding and _stream.encoding.lower() != "utf-8":
         _stream.reconfigure(encoding="utf-8", errors="backslashreplace")
 
-app = typer.Typer(no_args_is_help=True, add_completion=False, help="탱고 시퀀스를 영상에서 나눠 피구라별 주의점을 알려줍니다.")
+app = typer.Typer(no_args_is_help=True, add_completion=False, help="TangoLibrary: 탱고 레슨 영상을 노트·피구라별 주의점으로 정리해 줍니다.")
 
 
 def _load(sequence: str, library: Path | None):
@@ -21,7 +21,7 @@ def _load(sequence: str, library: Path | None):
     try:
         return lib, parse_sequence(sequence, lib)
     except UnknownFigureError as e:
-        typer.echo(f"오류: {e}\n`sequenceguider figures`로 알아듣는 이름 목록을 볼 수 있어요.", err=True)
+        typer.echo(f"오류: {e}\n`tangolibrary figures`로 알아듣는 이름 목록을 볼 수 있어요.", err=True)
         raise typer.Exit(2)
     except ValueError as e:
         typer.echo(f"오류: {e}", err=True)
@@ -95,7 +95,7 @@ def _summary_sequence(value: str, library: Path | None):
     lib = FigureLibrary.load(library or DEFAULT_LIBRARY)
     meta = MetadataSequence("text", matches_from_text(_read_summary(value), lib))
     if not meta.items:
-        typer.echo("오류: 요약글에서 피구라 이름을 찾지 못했습니다. `sequenceguider figures`로 알아듣는 이름을 "
+        typer.echo("오류: 요약글에서 피구라 이름을 찾지 못했습니다. `tangolibrary figures`로 알아듣는 이름을 "
                    "확인하거나 -s로 순서를 알려주세요.", err=True)
         raise typer.Exit(2)
     _print_matches(meta, None)
@@ -473,7 +473,7 @@ def notes(
         for p in data["key_points"]:
             typer.echo(f"  {N.fmt_ts(p['t']):>8}  [{N.KINDS[p['kind']]}] {p['point']}")
     typer.echo(f"\n노트: {notes_path}")
-    typer.echo("웹에서 영상과 함께 보기: sequenceguider serve --home " + str(out.resolve().parent))
+    typer.echo("웹에서 영상과 함께 보기: tangolibrary serve --home " + str(out.resolve().parent))
 
 
 @app.command()
@@ -516,7 +516,7 @@ def batch(
     if failed:
         typer.echo("\n실패: " + ", ".join(failed) + "\n다시 실행하면 실패한 것만 다시 합니다.", err=True)
         raise typer.Exit(1)
-    typer.echo(f"\n끝났어요. 보기: sequenceguider serve --home {home}")
+    typer.echo(f"\n끝났어요. 보기: tangolibrary serve --home {home}")
 
 
 @app.command()

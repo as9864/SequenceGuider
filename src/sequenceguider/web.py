@@ -466,7 +466,7 @@ def _id_list(value) -> list[str]:
 
 def make_handler(app: App):
     class Handler(BaseHTTPRequestHandler):
-        server_version = "SequenceGuider"
+        server_version = "TangoLibrary"
 
         def log_message(self, fmt, *args):  # quiet: the terminal is for the startup line
             pass
