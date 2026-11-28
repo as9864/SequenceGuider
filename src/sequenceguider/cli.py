@@ -519,6 +519,33 @@ def batch(
     typer.echo(f"\n끝났어요. 보기: sequenceguider serve --home {home}")
 
 
+@app.command("import-notion")
+def import_notion(
+    export: Path = typer.Argument(..., help="노션에서 'Markdown & CSV'로 내보낸 zip 파일 (또는 그 zip을 푼 폴더)"),
+    home: Path = typer.Option(Path("."), help="웹 화면의 홈 폴더 (serve --home과 같게)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="만들지 않고 무엇이 생길지만 보여 주기"),
+) -> None:
+    """노션에서 내보낸 글(데이터베이스의 페이지들)을 레슨으로 가져옵니다. 다시 실행하면 바뀐 페이지만 고칩니다."""
+    from sequenceguider import notion
+
+    if not export.exists():
+        typer.echo(f"오류: 파일이 없습니다: {export}", err=True)
+        raise typer.Exit(2)
+    home.mkdir(parents=True, exist_ok=True)
+    try:
+        result = notion.import_export(home, export, dry_run=dry_run)
+    except ValueError as e:
+        typer.echo(f"오류: {e}", err=True)
+        raise typer.Exit(1)
+    words = {"created": "새로", "updated": "고침", "unchanged": "그대로"}
+    for item in result.lessons:
+        typer.echo(f"  [{words[item['status']]}] {notion.KINDS[item['kind']]:<3} {item['title']}")
+    typer.echo(f"\n{'(미리 보기) ' if dry_run else ''}새로 {len(result.created)}개, 고침 {len(result.updated)}개, "
+               f"그대로 {len(result.unchanged)}개")
+    if not dry_run:
+        typer.echo(f"보기: sequenceguider serve --home {home}")
+
+
 @app.command()
 def serve(
     home: Path = typer.Option(Path("."), help="분석 결과(<이름>_sequenceguider/)와 연습 기록을 두는 폴더"),

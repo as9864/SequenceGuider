@@ -26,7 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from sequenceguider import categories
+from sequenceguider import categories, notion
 from sequenceguider.records import Records
 
 APP_HTML = Path(__file__).parent / "web" / "app.html"
@@ -34,6 +34,7 @@ _RANGE = re.compile(r"bytes=(\d*)-(\d*)$")
 VIDEO_EXTS = {".mp4", ".m4v", ".mov", ".webm", ".mkv", ".ogv"}
 AUDIO_EXTS = {".m4a", ".mp3", ".wav", ".aac", ".ogg", ".oga", ".opus", ".flac", ".weba"}
 LESSON_FILE = "lesson.json"
+MAX_IMPORT = 4 << 30  # a Notion export with many images can be big
 # Windows' registry often has no (or an odd) type for these, and <audio> needs a playable one
 for _ext, _type in {".m4a": "audio/mp4", ".mp3": "audio/mpeg", ".aac": "audio/aac", ".opus": "audio/ogg",
                     ".flac": "audio/flac", ".weba": "audio/webm", ".wav": "audio/wav"}.items():
@@ -165,6 +166,7 @@ def find_lessons(home: Path) -> list[dict]:
         notes = next((m["notes"] for m in media if m["notes"]), None)
         name = meta.get("title") or title or folder.name.removesuffix("_sequenceguider")
         suggested = categories.clean(c for m in media for c in suggested_categories(folder / m["dir"], name))
+        info = meta.get("notion") if isinstance(meta.get("notion"), dict) else None
         lessons.append({
             "id": folder.name,
             "title": name,
@@ -179,9 +181,15 @@ def find_lessons(home: Path) -> list[dict]:
             "figures": [f for m in media for f in m["figures"]],
             "has_guide": any(m["has_guide"] for m in media),
             "notes": notes,
+            # written in Notion and imported (notion.py): the pages are shown as a document in the lesson
+            "doc": None if info is None else {
+                "kind": info.get("kind", "note"), "date": info.get("date"), "people": info.get("people", []),
+                "tags": info.get("tags", []), "summary": info.get("summary", ""), "pages": len(info.get("pages", [])),
+            },
             "updated_at": datetime.fromtimestamp(max(stamps, default=folder.stat().st_mtime)).isoformat(timespec="seconds"),
         })
-    return sorted(lessons, key=lambda x: x["updated_at"], reverse=True)
+    # newest first; lessons imported together are ordered by the date written in Notion
+    return sorted(lessons, key=lambda x: (x["updated_at"], (x["doc"] or {}).get("date") or ""), reverse=True)
 
 
 def folder_stem(name: str) -> str:
@@ -359,6 +367,32 @@ class App:
         except (KeyError, StopIteration):
             pass
 
+    def import_notion(self, read: Callable[[int], bytes], length: int) -> dict:
+        """A Notion export zip uploaded from the page (`read` reads the request body): saved to
+        .imports/, turned into lessons (notion.import_export), then deleted."""
+        if length <= 0:
+            raise ValueError("올린 파일이 비어 있어요")
+        if length > MAX_IMPORT:
+            raise ValueError(f"파일이 너무 커요 ({length >> 20}MB). {MAX_IMPORT >> 30}GB까지 올릴 수 있어요")
+        tmp_dir = self.home / ".imports"
+        tmp_dir.mkdir(exist_ok=True)
+        path = tmp_dir / f"{uuid.uuid4().hex[:8]}.zip"
+        try:
+            with open(path, "wb") as f:
+                left = length
+                while left > 0 and (chunk := read(min(1 << 20, left))):
+                    f.write(chunk)
+                    left -= len(chunk)
+            if left:
+                raise ValueError("파일을 끝까지 받지 못했어요. 다시 올려 주세요")
+            with self._lock:
+                return notion.import_export(self.home, path).as_json()
+        finally:
+            path.unlink(missing_ok=True)
+
+    def doc(self, lesson: str) -> dict:
+        return notion.render_doc(self._folder(lesson), lesson)
+
     def lesson_file(self, lesson: str, rel: str) -> Path | None:
         base = (self.home / lesson).resolve()
         path = (base / rel).resolve()
@@ -433,7 +467,7 @@ class App:
             rest = [m for m in meta["media"] if m["id"] != media]
             if len(rest) == len(meta["media"]):
                 raise KeyError("없는 미디어입니다")
-            if not rest:
+            if not rest and not meta.get("notion"):  # a note from Notion is a lesson even without media
                 raise ValueError("레슨에는 미디어가 하나는 있어야 해요")
             save_lesson(folder, {**meta, "media": rest})
 
@@ -549,6 +583,10 @@ def make_handler(app: App):
                     b = self._body()
                     return self._json({"id": app.new_lesson(str(b.get("source", "")), str(b.get("title", "")),
                                                             _id_list(b.get("categories")))}, 201)
+                if path == "/api/import/notion" and method == "POST":
+                    return self._json(app.import_notion(self.rfile.read, int(self.headers.get("Content-Length") or 0)), 201)
+                if (m := re.fullmatch(r"/api/lessons/([^/]+)/doc", path)) and method == "GET":
+                    return self._json(app.doc(m.group(1)))
                 if path == "/api/categories" and method == "GET":
                     return self._json(categories.as_json())
                 if (m := re.fullmatch(r"/api/lessons/([^/]+)/categories", path)) and method == "PUT":

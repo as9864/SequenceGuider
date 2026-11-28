@@ -149,6 +149,31 @@ mark { background: #ffe58a; color: #1d1d1f; border-radius: 3px; }
 .cat-strip { max-width: 1100px; margin: 0 auto; padding: 0 16px 8px; display:flex; gap: 4px; flex-wrap: wrap; align-items: center; }
 .catpick h3 { font-size: .8rem; color: var(--muted); margin: 10px 0 4px; }
 .catpick .sug { font-size: .7rem; color: var(--accent); font-weight: 700; }
+/* notes imported from Notion */
+.badge.doc { background: #8a6d3b; }
+.badge.k-lesson { background: #3b7d5a; } .badge.k-practica { background: #b05a2f; } .badge.k-feedback { background: #a0436b; }
+.doc { max-width: 820px; }
+.doc .meta { display:flex; flex-wrap: wrap; gap: 6px 14px; color: var(--muted); font-size: .88rem; margin: 4px 0 10px; }
+.doc .summary { border-left: 3px solid var(--accent); padding: 6px 12px; background: var(--card); border-radius: 0 8px 8px 0; margin: 10px 0; }
+.doc .toc { font-size: .9rem; margin: 10px 0 16px; } .doc .toc a { text-decoration: none; }
+.doc .toc ul { margin: 4px 0; padding-left: 18px; }
+.doc .page { margin-top: 26px; padding-top: 14px; border-top: 1px solid var(--line); scroll-margin-top: calc(var(--head, 100px) + 10px); }
+.doc .page:first-of-type { border-top: none; margin-top: 8px; padding-top: 0; }
+.doc .page > h2.pt { margin-top: 0; }
+.doc .body { overflow-wrap: anywhere; }
+.doc .body img { max-width: 100%; height: auto; border-radius: 8px; }
+.doc .body h1 { font-size: 1.25rem; margin: 22px 0 8px; } .doc .body h2 { font-size: 1.1rem; } .doc .body h3 { font-size: 1rem; margin: 18px 0 6px; }
+.doc .body blockquote { margin: 8px 0; padding: 2px 12px; border-left: 3px solid var(--line); color: var(--muted); }
+.doc .body .callout { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 4px 14px; margin: 10px 0; }
+.doc .body details { border: 1px solid var(--line); border-radius: 10px; padding: 6px 12px; margin: 8px 0; }
+.doc .body details summary { cursor: pointer; font-weight: 600; }
+.doc .body pre { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow-x: auto; }
+.doc .body code { font-size: .88em; background: var(--card); border-radius: 4px; padding: 0 4px; }
+.doc .body ul.todos { list-style: none; padding-left: 4px; }
+.doc .body li.todo input { width: auto; }
+.doc .body table { min-width: 0; }
+.doc .props { font-size: .85rem; color: var(--muted); margin-bottom: 8px; }
+.kindbar { margin-top: -4px; }
 dl.gloss dt { font-weight: 700; margin-top: 8px; } dl.gloss dd { margin: 0; }
 @media (max-width: 900px) {
   .nv { grid-template-columns: 1fr; padding-top: 0; }
@@ -266,6 +291,9 @@ function catPicker(selected, suggested = []) {  // checkboxes grouped like 기�
     `<label><input type="checkbox" value="${esc(c.id)}" ${selected.includes(c.id) ? 'checked' : ''}>${esc(c.name_ko)}${
       suggested.includes(c.id) ? ' <span class="sug">추천</span>' : ''}</label>`).join('')}</div>`).join('');
 }
+const KIND_NAMES = { lesson: '레슨', practica: '쁘락', feedback: '피드백', note: '정리', video: '영상 분석' };
+const lessonKind = l => l.doc ? l.doc.kind : 'video';
+const fmtDate = s => { const [y, m, d] = s.split('-'); return `${y}년 ${+m}월 ${+d}일`; };
 const pickedCats = el => [...el.querySelectorAll('input:checked')].map(i => i.value);
 
 const today = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 10); };
@@ -328,7 +356,14 @@ async function renderLibrary() {
   const counts = {}; all.forEach(l => l.categories.forEach(c => { counts[c] = (counts[c] || 0) + 1; }));
   let cat = store.get('sg.cat');
   if (cat && !counts[cat]) cat = null;
-  const lessons = cat ? all.filter(l => l.categories.includes(cat)) : all;
+  const kinds = {}; all.forEach(l => { const k = lessonKind(l); kinds[k] = (kinds[k] || 0) + 1; });
+  let kind = store.get('sg.kind');
+  if (kind && !kinds[kind]) kind = null;
+  const lessons = all.filter(l => (!cat || l.categories.includes(cat)) && (!kind || lessonKind(l) === kind));
+  const kindbar = all.some(l => l.doc) ? `<div class="catbar kindbar" role="toolbar" aria-label="종류별 보기">
+    <button data-kind="" class="${kind ? '' : 'on'}">모든 종류</button>
+    ${Object.entries(KIND_NAMES).filter(([k]) => kinds[k]).map(([k, n]) =>
+      `<button data-kind="${k}" class="${kind === k ? 'on' : ''}">${n}<span class="n">${kinds[k]}</span></button>`).join('')}</div>` : '';
   const catbar = Object.keys(counts).length ? `<div class="catbar" role="toolbar" aria-label="카테고리별 보기">
     <button data-cat="" class="${cat ? '' : 'on'}">전체<span class="n">${all.length}</span></button>
     ${state.categories.filter(c => counts[c.id]).map(c =>
@@ -336,19 +371,31 @@ async function renderLibrary() {
   const cards = lessons.map(l => {
     const p = progress(l), last = lastPracticed(l.id);
     const pct = p.total ? Math.round(100 * p.done / p.total) : 0;
+    const summary = l.notes?.summary || l.doc?.summary;
     return `<a class="panel lesson" href="#/lesson/${encodeURIComponent(l.id)}">
-      <div class="row" style="gap:6px">${l.notes ? `<span class="badge notes">노트${l.notes.duration_s ? ' · ' + fmtHMS(l.notes.duration_s) : ''}</span>` : ''}${l.has_guide ? '<span class="badge">동작 분석</span>' : ''}${l.media.length > 1 ? `<span class="chip">${l.media.map(mediaIcon).join('')} ${l.media.length}개</span>` : ''}</div>
+      <div class="row" style="gap:6px">${l.doc ? `<span class="badge k-${lessonKind(l)}">${KIND_NAMES[lessonKind(l)]}</span><span class="badge doc">노션 글${l.doc.pages > 1 ? ' · ' + l.doc.pages + '쪽' : ''}</span>` : ''}${l.notes ? `<span class="badge notes">노트${l.notes.duration_s ? ' · ' + fmtHMS(l.notes.duration_s) : ''}</span>` : ''}${l.has_guide ? '<span class="badge">동작 분석</span>' : ''}${l.media.length > 1 ? `<span class="chip">${l.media.map(mediaIcon).join('')} ${l.media.length}개</span>` : ''}</div>
       <h3>${esc(l.title)}</h3>
-      ${l.notes?.summary ? `<div class="small muted clamp">${esc(l.notes.summary)}</div>` : ''}
-      <div class="chips">${l.categories.length ? catChips(l.categories) : lessonFigures(l).map(f => `<span class="chip">${esc(label(f))}</span>`).join('')}</div>
-      <div><div class="row between small"><span>연습 체크리스트 ${p.done}/${p.total}</span><span class="muted">${pct}%</span></div>
-      <div class="meter"><div style="width:${pct}%"></div></div></div>
+      ${l.doc?.date || l.doc?.people.length ? `<div class="small muted">${[l.doc.date && fmtDate(l.doc.date), l.doc.people.join(', ')].filter(Boolean).map(esc).join(' · ')}</div>` : ''}
+      ${summary ? `<div class="small muted clamp">${esc(summary)}</div>` : ''}
+      <div class="chips">${l.categories.length ? catChips(l.categories) : lessonFigures(l).map(f => `<span class="chip">${esc(label(f))}</span>`).join('')}${(l.doc?.tags || []).map(t => `<span class="chip">${esc(t)}</span>`).join('')}</div>
+      ${p.total || !l.doc ? `<div><div class="row between small"><span>연습 체크리스트 ${p.done}/${p.total}</span><span class="muted">${pct}%</span></div>
+      <div class="meter"><div style="width:${pct}%"></div></div></div>` : ''}
       <div class="small muted">${last ? `마지막 연습 ${fmtDay(last)}` : '아직 연습 기록 없음'}</div>
     </a>`;
   }).join('');
   view.innerHTML = `<main>
-    <div class="row between"><h1>내 레슨</h1><button class="primary" id="new-btn">＋ 새 레슨</button></div>
-    ${catbar}
+    <div class="row between"><h1>내 레슨</h1><div class="row"><button id="import-btn">노션에서 가져오기</button><button class="primary" id="new-btn">＋ 새 레슨</button></div></div>
+    ${catbar}${kindbar}
+    <section class="panel" id="import-panel" hidden>
+      <h2 style="margin-top:0">노션에서 가져오기</h2>
+      <p class="small">노션에서 데이터베이스 페이지(예: Tango Note) 오른쪽 위 <b>···</b> → <b>내보내기</b> → 형식 <b>Markdown &amp; CSV</b>,
+        <b>하위 페이지 포함</b>을 켜고 받은 <b>zip 파일</b>을 그대로 올려 주세요. 압축은 풀지 않아도 돼요.</p>
+      <p class="small muted">페이지 하나가 레슨 하나가 돼요. Keyword는 카테고리로, 영상주소와 글 속 유튜브 링크는 레슨 영상으로, 이미지와 하위 페이지는 글 안에 그대로 들어와요.
+        같은 파일을 다시 올려도 겹치지 않고, 바뀐 페이지만 고쳐요.</p>
+      <div class="row"><input type="file" id="import-file" accept=".zip,application/zip" style="width:auto;flex:1"><button class="primary" id="import-go">가져오기</button></div>
+      <div class="error" id="import-error"></div>
+      <div class="small" id="import-result"></div>
+    </section>
     <section class="panel" id="new-panel" hidden>
       <form id="new-form">
         <label class="tick" style="margin-top:0"><input type="checkbox" id="nf-analyze" checked><span>분석이 필요해요
@@ -385,6 +432,24 @@ async function renderLibrary() {
        <p class="muted">위의 <b>새 영상 분석</b>에 유튜브 링크를 넣거나, 이 폴더에서 <code>sequenceguider analyze</code>를 실행하면 여기에 나타납니다.</p></div>`}
   </main>`;
   view.querySelectorAll('[data-cat]').forEach(b => b.onclick = () => { store.set('sg.cat', b.dataset.cat || null); renderLibrary(); });
+  view.querySelectorAll('[data-kind]').forEach(b => b.onclick = () => { store.set('sg.kind', b.dataset.kind || null); renderLibrary(); });
+  $('#import-btn').onclick = () => { const p = $('#import-panel'); p.hidden = !p.hidden; };
+  $('#import-go').onclick = async () => {
+    const file = $('#import-file').files[0];
+    $('#import-error').textContent = ''; $('#import-result').textContent = '';
+    if (!file) { $('#import-error').textContent = '노션에서 받은 zip 파일을 골라 주세요'; return; }
+    const btn = $('#import-go'); btn.disabled = true; btn.textContent = '가져오는 중...';
+    try {
+      const res = await fetch('/api/import/notion', { method: 'POST', headers: { 'Content-Type': 'application/zip' }, body: file });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      store.set('sg.importResult', `새로 ${data.created}개, 고침 ${data.updated}개, 그대로 ${data.unchanged}개`);
+      store.set('sg.cat', null); store.set('sg.kind', null);
+      await load(); await renderLibrary();
+    } catch (e) { $('#import-error').textContent = '가져오지 못했어요: ' + e.message; btn.disabled = false; btn.textContent = '가져오기'; }
+  };
+  const done = store.get('sg.importResult');
+  if (done) { store.set('sg.importResult', null); toast('노션에서 가져왔어요: ' + done); }
   const panel = $('#new-panel');
   $('#new-btn').onclick = () => { panel.hidden = !panel.hidden; if (!panel.hidden) $('#nf-source').focus(); };
   const kindChanged = () => {
@@ -446,7 +511,8 @@ function renderLessonBar() {
   if (!currentLesson) { lessonBar.innerHTML = ''; return; }
   const p = progress(currentLesson), started = timerStart(), item = currentMedia;
   const both = item?.notes && item.has_guide, id = encodeURIComponent(currentLesson.id);
-  const itemPath = item && item !== currentLesson.media[0] ? '/' + item.id : '';
+  const first = currentLesson.doc ? null : currentLesson.media[0];  // the item #/lesson/<id> opens
+  const itemPath = item && item !== first ? '/' + item.id : '';
   lessonBar.innerHTML = `<div class="lesson-bar">
     <a href="#/" class="link small muted" style="text-decoration:none">← 레슨 목록</a>
     <span class="title">${esc(currentLesson.title)}</span>
@@ -455,9 +521,9 @@ function renderLessonBar() {
     ${started ? `<span class="timer" id="timer"></span><button class="primary" id="timer-stop">끝내고 기록</button>`
               : `<button id="timer-start">연습 시작</button><button class="primary" id="log-open">기록 남기기</button>`}
   </div>
-  <nav class="media-strip" aria-label="이 레슨의 영상·오디오">${currentLesson.media.map(m => {
+  <nav class="media-strip" aria-label="이 레슨의 영상·오디오">${currentLesson.doc ? `<a class="mchip ${lessonMode === 'doc' ? 'on' : ''}" href="#/lesson/${id}"><span>📝</span><span>노션 글</span></a>` : ''}${currentLesson.media.map(m => {
     const [cls, tag] = mediaTag(currentLesson, m);
-    return `<a class="mchip ${m === item ? 'on' : ''}" href="#/lesson/${id}${m === currentLesson.media[0] ? '' : '/' + m.id}">
+    return `<a class="mchip ${m === item && lessonMode !== 'doc' ? 'on' : ''}" href="#/lesson/${id}${m === first ? '' : '/' + m.id}">
       <span>${mediaIcon(m)}</span><span>${esc(mediaName(currentLesson, m))}</span><span class="tag ${cls}">${tag}</span></a>`;
   }).join('')}<button class="mchip add" id="media-add">＋ 영상·오디오 추가</button></nav>
   <div class="cat-strip">${currentLesson.categories.length ? catChips(currentLesson.categories) : '<span class="small muted">카테고리 없음</span>'}
@@ -480,13 +546,53 @@ const mediaBase = (lesson, m) => `/lessons/${encodeURIComponent(lesson.id)}${m.d
 function renderLesson(id, mediaId, mode) {
   currentLesson = state.lessons.find(l => l.id === id);
   if (!currentLesson) { view.innerHTML = `<main><div class="panel empty">레슨을 찾을 수 없어요. <a href="#/">목록으로</a></div></main>`; return; }
-  const item = currentMedia = currentLesson.media.find(m => m.id === mediaId) || currentLesson.media[0];
+  const picked = currentLesson.media.find(m => m.id === mediaId);
+  if (currentLesson.doc && (!picked || mode === 'doc')) {
+    currentMedia = null; lessonMode = 'doc';
+    renderLessonBar();
+    document.documentElement.style.setProperty('--head', $('header.top').offsetHeight + 'px');
+    return renderDoc(currentLesson);
+  }
+  const item = currentMedia = picked || currentLesson.media[0];
   lessonMode = item.notes && (mode !== 'guide' || !item.has_guide) ? 'notes' : item.has_guide ? 'guide' : 'play';
   renderLessonBar();
   document.documentElement.style.setProperty('--head', $('header.top').offsetHeight + 'px');
   if (lessonMode === 'notes') return renderNotes(currentLesson, item);
   if (lessonMode === 'play') return renderPlay(currentLesson, item);
   view.innerHTML = `<iframe class="report" src="${mediaBase(currentLesson, item)}/index.html" title="${esc(currentLesson.title)}"></iframe>`;
+}
+
+// ---------------------------------------------------------------- notes imported from Notion
+async function renderDoc(lesson) {
+  view.innerHTML = `<main class="doc"><p class="muted">불러오는 중...</p></main>`;
+  let doc;
+  try { doc = await api(`/api/lessons/${encodeURIComponent(lesson.id)}/doc`); }
+  catch (e) { view.innerHTML = `<main class="doc"><div class="panel error">글을 불러오지 못했어요: ${esc(e.message)}</div></main>`; return; }
+  if (currentLesson !== lesson) return;
+  const meta = [doc.kind && `<span class="badge k-${esc(doc.kind)}">${KIND_NAMES[doc.kind] || ''}</span>`,
+                doc.date && `<span>${esc(fmtDate(doc.date))}</span>`, doc.people.length && `<span>${esc(doc.people.join(', '))}</span>`,
+                ...doc.props.map(p => `<span>${esc(p.name)}: ${esc(p.value)}</span>`)].filter(Boolean).join('');
+  const subs = doc.pages.slice(1);
+  const toc = subs.length ? `<nav class="toc panel"><b>하위 페이지</b><ul>${subs.map(p =>
+    `<li style="margin-left:${(p.depth - 1) * 16}px"><a href="#page-${esc(p.anchor)}" data-page-link>${esc(p.title)}</a></li>`).join('')}</ul></nav>` : '';
+  view.innerHTML = `<main class="doc">
+    <h1>${esc(doc.title)}</h1>
+    <div class="meta">${meta}</div>
+    ${doc.keywords.length ? `<div class="chips">${doc.keywords.map(k => `<span class="chip">${esc(k)}</span>`).join('')}</div>` : ''}
+    ${doc.summary ? `<div class="summary">${esc(doc.summary)}</div>` : ''}
+    ${toc}
+    ${doc.pages.map((p, i) => `<section class="page" id="page-${esc(p.anchor)}">
+      ${i ? `<h2 class="pt">${esc(p.title)}</h2>` : ''}
+      ${p.props.length ? `<div class="props">${p.props.map(x => `${esc(x.name)}: ${esc(x.value)}`).join(' · ')}</div>` : ''}
+      <div class="body">${p.html || (i ? '' : '<p class="muted">본문이 비어 있어요.</p>')}</div></section>`).join('')}
+    <p class="small muted" style="margin-top:30px">노션에서 가져온 글이에요. 노션에서 고친 뒤 다시 내보내 올리면 이 글도 바뀌어요.</p>
+  </main>`;
+  view.onclick = e => {  // links between the pages scroll; they aren't routes
+    const a = e.target.closest('a[data-page-link]');
+    if (!a || !a.getAttribute('href').startsWith('#page-')) return;
+    e.preventDefault();
+    document.getElementById(a.getAttribute('href').slice(1))?.scrollIntoView({ behavior: 'smooth' });
+  };
 }
 
 // ---------------------------------------------------------------- media items: play, add, analyse
@@ -904,7 +1010,7 @@ async function route() {
   if (h.startsWith('#/lesson/')) {
     // #/lesson/<id>[/<media id>][/guide]
     const [id, ...rest] = h.slice('#/lesson/'.length).split('/').map(decodeURIComponent);
-    const mode = rest.at(-1) === 'guide' ? rest.pop() : undefined;
+    const mode = ['guide', 'doc'].includes(rest.at(-1)) ? rest.pop() : undefined;
     return renderLesson(id, rest[0], mode);
   }
   currentLesson = null;
