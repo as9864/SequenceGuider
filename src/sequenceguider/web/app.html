@@ -150,6 +150,41 @@ mark { background: #ffe58a; color: #1d1d1f; border-radius: 3px; }
 .catpick h3 { font-size: .8rem; color: var(--muted); margin: 10px 0 4px; }
 .catpick .sug { font-size: .7rem; color: var(--accent); font-weight: 700; }
 dl.gloss dt { font-weight: 700; margin-top: 8px; } dl.gloss dd { margin: 0; }
+/* review + practica */
+nav.main .count { font-size: .7rem; font-weight: 800; border-radius: 999px; padding: 0 6px; margin-left: 4px; background: var(--warn); color: #fff; vertical-align: 1px; }
+.today { display:grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: start; }
+@media (max-width: 800px) { .today { grid-template-columns: 1fr; } }
+.clip video, .clip .yt { width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 10px; display:block; }
+.clip .yt iframe { width: 100%; height: 100%; border: 0; border-radius: 10px; }
+.clip audio { width: 100%; display:block; }
+.eyebrow { font-size: .75rem; font-weight: 800; letter-spacing: .04em; color: var(--accent); text-transform: uppercase; }
+.bigpoint { font-size: 1.25rem; font-weight: 800; line-height: 1.35; margin: 6px 0; }
+.rv-card { max-width: 760px; margin: 0 auto; }
+.rv-progress { height: 6px; border-radius: 99px; background: var(--line); overflow: hidden; margin: 4px 0 14px; }
+.rv-progress > div { height: 100%; background: var(--accent); }
+.rv-hidden { border: 2px dashed var(--line); border-radius: 12px; padding: 18px; text-align: center; margin-top: 12px; }
+.answer { display:grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
+.answer button { padding: 12px; font-weight: 700; font-size: 1rem; }
+.answer .no { border-color: var(--warn); color: var(--warn); }
+.answer .yes { background: var(--ok); border-color: var(--ok); color: #fff; }
+.chip.hot { border-color: var(--warn); color: var(--warn); font-weight: 700; background: none; }
+.feel { font-size: .78rem; font-weight: 700; border-radius: 999px; padding: 1px 9px; border: 1px solid var(--line); white-space: nowrap; }
+.feel.good { color: var(--ok); border-color: var(--ok); } .feel.confusing { color: var(--warn); border-color: var(--warn); }
+.pitem { display:grid; grid-template-columns: 1fr auto; gap: 6px 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.pitem input.note { grid-column: 1 / -1; }
+.feelpick { display:inline-flex; border:1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.feelpick button { border: none; border-radius: 0; padding: 4px 9px; font-size: .82rem; }
+.feelpick button.on.good { background: var(--ok); color: #fff; } .feelpick button.on.ok { background: var(--fg); color: var(--bg); }
+.feelpick button.on.confusing { background: var(--warn); color: #fff; }
+dialog.wide { width: min(680px, calc(100vw - 32px)); }
+nav.main { white-space: nowrap; }
+@media (max-width: 480px) { .bar { gap: 6px; } nav.main a { padding: 6px 6px; } .brand { font-size: .9rem; } }
+.pr { display:flex; flex-direction: column; gap: 8px; }
+.pr .items { display:flex; flex-direction: column; gap: 4px; }
+.pr .it { display:flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.next { border-left: 3px solid var(--accent); padding: 4px 10px; white-space: pre-wrap; }
+.figpick button.fig { border-radius: 999px; padding: 3px 10px; font-size: .85rem; }
+.figpick button.fig.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
 @media (max-width: 900px) {
   .nv { grid-template-columns: 1fr; padding-top: 0; }
   .nv-player { top: var(--head, 100px); z-index: 3; background: var(--bg); padding-top: 8px; }
@@ -163,7 +198,7 @@ dl.gloss dt { font-weight: 700; margin-top: 8px; } dl.gloss dd { margin: 0; }
 <header class="top">
   <div class="bar">
     <a class="brand" href="#/">SequenceGuider</a>
-    <nav class="main"><a href="#/" data-nav="library">배우기</a><a href="#/records" data-nav="records">기록</a></nav>
+    <nav class="main"><a href="#/" data-nav="library">배우기</a><a href="#/review" data-nav="review">복습<span class="count" id="rv-count" hidden></span></a><a href="#/practica" data-nav="practica">쁘락</a><a href="#/records" data-nav="records">기록</a></nav>
   </div>
   <div id="lesson-bar"></div>
 </header>
@@ -234,13 +269,39 @@ dl.gloss dt { font-weight: 700; margin-top: 8px; } dl.gloss dd { margin: 0; }
     </div>
   </form>
 </dialog>
+<dialog id="pr-dialog" class="wide">
+  <form method="dialog" id="pr-form">
+    <h2 style="margin-top:0" id="pr-title">쁘락 기록</h2>
+    <div class="row">
+      <div style="flex:1; min-width:130px"><label class="field" for="pr-day">날짜</label><input type="date" id="pr-day" required></div>
+      <div style="flex:2; min-width:160px"><label class="field" for="pr-place">장소</label><input id="pr-place" list="pr-places" maxlength="80" placeholder="어느 쁘락?"></div>
+      <div style="flex:1; min-width:100px"><label class="field" for="pr-min">시간 (분)</label><input type="number" id="pr-min" min="1" max="1440" placeholder="선택"></div>
+    </div>
+    <label class="field" for="pr-partners">같이 춘 사람</label>
+    <input id="pr-partners" maxlength="200" placeholder="쉼표로 구분 (선택)">
+    <label class="field">연습한 것 <span class="muted small">눌러서 추가하고, 어땠는지 골라 주세요</span></label>
+    <div class="figpick" id="pr-figs"></div>
+    <div class="row" style="margin-top:6px; flex-wrap:nowrap"><input id="pr-free" placeholder="직접 적기: 예) 아브라소, 음악 해석, 론다에서 공간" maxlength="120"><button type="button" id="pr-free-add" style="white-space:nowrap">추가</button></div>
+    <div id="pr-items"></div>
+    <label class="field" for="pr-note">전체 메모</label>
+    <textarea id="pr-note" placeholder="오늘 느낀 것, 들은 피드백"></textarea>
+    <label class="field" for="pr-next">다음 쁘락에서 해볼 것</label>
+    <textarea id="pr-next" placeholder="다음에 가기 전에 여기서 다시 볼 수 있어요"></textarea>
+    <datalist id="pr-places"></datalist>
+    <div class="error" id="pr-error"></div>
+    <div class="row" style="justify-content:flex-end; margin-top: 14px">
+      <button type="button" id="pr-cancel">취소</button>
+      <button class="primary" id="pr-save">저장</button>
+    </div>
+  </form>
+</dialog>
 <div class="toast" id="toast"></div>
 
 <script>
 const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const view = $('#view'), lessonBar = $('#lesson-bar');
-const state = { lessons: [], checks: {}, sessions: [], jobs: [], categories: [] };
+const state = { lessons: [], checks: {}, sessions: [], jobs: [], categories: [], review: null, practicas: [], figures: [] };
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
   set(k, v) { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} },
@@ -255,8 +316,10 @@ async function api(path, opts = {}) {
 }
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 1800); }
 async function load() {
-  [state.lessons, state.checks, state.sessions] = await Promise.all([api('/api/lessons'), api('/api/checks'), api('/api/sessions')]);
-  if (!state.categories.length) state.categories = await api('/api/categories');
+  [state.lessons, state.checks, state.sessions, state.practicas, state.review] = await Promise.all([
+    api('/api/lessons'), api('/api/checks'), api('/api/sessions'), api('/api/practicas'), api('/api/review?day=' + today())]);
+  if (!state.categories.length) [state.categories, state.figures] = await Promise.all([api('/api/categories'), api('/api/figures')]);
+  reviewBadge();
 }
 const catName = id => state.categories.find(c => c.id === id)?.name_ko || id;
 const catChips = ids => ids.map(c => `<span class="chip cat">${esc(catName(c))}</span>`).join('');
@@ -347,6 +410,7 @@ async function renderLibrary() {
     </a>`;
   }).join('');
   view.innerHTML = `<main>
+    ${todayPanel(false)}
     <div class="row between"><h1>내 레슨</h1><button class="primary" id="new-btn">＋ 새 레슨</button></div>
     ${catbar}
     <section class="panel" id="new-panel" hidden>
@@ -578,7 +642,7 @@ $('#media-form').onsubmit = async e => {
 // ---------------------------------------------------------------- notes (sequenceguider notes)
 const KINDS = { correction: '교정', principle: '원리', technique: '테크닉', connection: '연결·아브라소', musicality: '음악성', exercise: '연습법', other: '기타' };
 const ROLE_KO = { leader: '리더', follower: '팔로워' };
-let notesTimer = null;
+let notesTimer = null, seekTo = null;  // seekTo: where the notes view starts, from #/lesson/...?t=
 function youtubeId(url) { const m = /(?:v=|youtu\.be\/|shorts\/|embed\/|live\/)([\w-]{6,})/.exec(url || ''); return m ? m[1] : null; }
 function loadYouTubeApi() {
   if (window.YT?.Player) return Promise.resolve();
@@ -646,10 +710,12 @@ async function renderNotes(lesson, item) {
       video.append(track);
     }
     player = { seek(t) { video.currentTime = t; video.play().catch(() => {}); }, time: () => video.currentTime };
+    if (seekTo) { const t = seekTo; video.addEventListener('loadedmetadata', () => { video.currentTime = t; }, { once: true }); }
   } else if (ytId) {
+    const start = seekTo ? Math.floor(seekTo) : 0;
     loadYouTubeApi().then(() => {
       if (!$('#nv-yt')) return;
-      const yt = new YT.Player('nv-yt', { videoId: ytId, playerVars: { rel: 0, playsinline: 1 } });
+      const yt = new YT.Player('nv-yt', { videoId: ytId, playerVars: { rel: 0, playsinline: 1, ...(start ? { start } : {}) } });
       player = { seek(t) { yt.seekTo?.(t, true); yt.playVideo?.(); }, time: () => yt.getCurrentTime?.() || 0 };
     });
   }
@@ -835,6 +901,7 @@ function renderRecords() {
   lessonBar.innerHTML = ''; currentLesson = null;
   const S = state.sessions, names = figureNames();
   const byDay = {}; S.forEach(s => { byDay[s.day] = (byDay[s.day] || 0) + s.minutes; });
+  state.practicas.forEach(p => { byDay[p.day] = (byDay[p.day] || 0) + (p.minutes || 60); });  // a practica night counts as practice
   const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 6);
   const weekKey = new Date(weekAgo.getTime() - weekAgo.getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
   const weekMin = S.filter(s => s.day >= weekKey).reduce((a, s) => a + s.minutes, 0);
@@ -893,22 +960,238 @@ function renderRecords() {
   });
 }
 
+// ---------------------------------------------------------------- review: spaced repetition and today's one sequence
+const TAG_KO = { ...{ correction: '교정', principle: '원리', technique: '테크닉', connection: '연결·아브라소', musicality: '음악성', exercise: '연습법', other: '기타' },
+                 figure: '피구라 핵심', practica: '쁘락에서 헷갈림' };
+const FEEL_KO = { good: '😊 잘 됐어요', ok: '🙂 해 봤어요', confusing: '😵 헷갈려요' };
+function reviewBadge() {
+  const el = $('#rv-count'), n = state.review ? state.review.queue.length : 0;
+  if (!el) return;
+  el.hidden = !n; el.textContent = n > 99 ? '99+' : n;
+}
+const cardLesson = c => state.lessons.find(l => l.id === c.lesson);
+const cardMedia = c => cardLesson(c)?.media.find(m => m.id === c.media);
+function clipHtml(c) {  // the few seconds of the lesson the card is about
+  const l = cardLesson(c), m = cardMedia(c);
+  if (!l || !m || c.start == null) return '';
+  const s = Math.floor(c.start), e = Math.ceil(c.end ?? c.start + 30);
+  const src = `/media/${encodeURIComponent(l.id)}/${encodeURIComponent(m.id)}#t=${s},${e}`;
+  if (m.kind === 'video') return `<div class="clip"><video controls preload="metadata" playsinline src="${src}"></video></div>`;
+  if (m.kind === 'audio') return `<div class="clip"><audio controls preload="metadata" src="${src}"></audio></div>`;
+  const yt = m.kind === 'youtube' && youtubeId(m.src);
+  if (yt) return `<div class="clip"><div class="yt"><iframe src="https://www.youtube.com/embed/${esc(yt)}?start=${s}&end=${e}&rel=0&playsinline=1" allowfullscreen title="YouTube"></iframe></div></div>`;
+  return '';
+}
+function lessonLink(c) {
+  const l = cardLesson(c);
+  if (!l) return '';
+  const m = cardMedia(c), path = `#/lesson/${encodeURIComponent(l.id)}${m && m !== l.media[0] ? '/' + encodeURIComponent(m.id) : ''}`;
+  return `<a class="small" href="${path}${c.kind === 'point' && c.t != null ? '?t=' + Math.floor(c.t) : c.kind === 'figure' ? '/guide' : ''}">레슨에서 보기${c.t != null ? ' · ' + fmtHMS(c.t) : ''} →</a>`;
+}
+function lessonsWith(figure) { return state.lessons.filter(l => lessonFigures(l).some(f => f.figure === figure)); }
+const figName = k => state.figures.find(f => f.figure === k)?.name_ko || figureNames()[k] || k;
+function cardMeta(c) {
+  const where = c.kind === 'practica' ? `${fmtDay(c.learned)} 쁘락` : esc(c.lesson_title);
+  return `<div class="row small" style="gap:6px"><span class="kind ${c.tag === 'correction' ? 'correction' : ''}">${TAG_KO[c.tag] || c.tag}${ROLE_KO[c.role] ? ' · ' + ROLE_KO[c.role] : ''}</span>
+    <span class="muted">${[where, esc(c.section)].filter(Boolean).join(' · ')}</span>
+    ${c.boosted && c.kind !== 'practica' ? '<span class="chip hot">쁘락에서 헷갈렸던 것</span>' : ''}</div>
+    ${c.figures.length ? `<div class="chips" style="margin-top:6px">${c.figures.map(k => `<span class="chip">${esc(c.figure_names[k] || figName(k))}</span>`).join('')}</div>` : ''}`;
+}
+function pointHtml(c) {
+  return `<div class="bigpoint">${esc(c.point)}</div>${c.detail ? `<p style="margin:4px 0">${esc(c.detail)}</p>` : ''}${c.quote ? `<p class="quote small muted"><i>“${esc(c.quote)}”</i></p>` : ''}`;
+}
+function todayPanel(compact) {
+  const R = state.review, t = R?.today;
+  if (!R || (!t && !R.queue.length)) return '';
+  const left = R.queue.length;
+  const go = left ? `<a href="#/review"><button class="primary">복습 ${left}개 하기</button></a>` : `<span class="small" style="color:var(--ok); font-weight:700">오늘 복습 끝 ✓</span>`;
+  const conf = R.confusions.slice(0, 2);
+  if (!t) return `<section class="panel row between" style="margin-bottom:14px"><div><div class="eyebrow">오늘의 복습</div><b>오늘 떠올려 볼 카드가 ${left}개 있어요</b></div>${go}</section>`;
+  return `<section class="panel" style="margin-bottom:14px">
+    <div class="row between"><div class="eyebrow">오늘의 한 시퀀스${t.reviewed_today ? ' · 봤어요 ✓' : ''}</div><div class="row small muted">${R.streak ? `연속 ${R.streak}일 · ` : ''}${go}</div></div>
+    <div class="today" style="margin-top:10px">
+      <div>${clipHtml(t) || `<div class="notice">영상 구간이 없는 카드예요.</div>`}</div>
+      <div>${cardMeta(t)}${pointHtml(t)}
+        <div class="row" style="margin-top:6px">${lessonLink(t)}</div>
+        ${!compact && conf.length ? `<div class="small" style="margin-top:12px"><b>지난 쁘락에서 헷갈린 것</b>${conf.map(c => `<div>· ${esc(c.label)}${c.note ? ` <span class="muted">— ${esc(c.note)}</span>` : ''}</div>`).join('')}</div>` : ''}
+      </div>
+    </div></section>`;
+}
+
+let rvIndex = 0, rvShown = false, rvQueue = [], rvDone = 0;
+function renderReview() {
+  lessonBar.innerHTML = ''; currentLesson = null;
+  const R = state.review;
+  rvQueue = R.queue.slice(0, 10); rvIndex = 0; rvShown = false; rvDone = 0;
+  drawReview();
+}
+function drawReview() {
+  const R = state.review, c = rvQueue[rvIndex];
+  const upcoming = Object.entries(R.upcoming).slice(0, 7);
+  const footer = `<h2>다가오는 복습</h2><div class="panel small">${upcoming.length ? upcoming.map(([d, n]) => `<span class="chip">${fmtDay(d)} · ${n}개</span>`).join(' ')
+      : '<span class="muted">복습한 카드는 1일 → 3일 → 7일 → 21일 간격으로 다시 나와요. 잊었으면 다음 날 다시.</span>'}
+    <div class="muted" style="margin-top:8px">카드 ${R.total_cards}개 중 ${R.learned_cards}개 복습 시작${R.waiting_new ? ` · 새 카드는 하루 5개씩 (남은 ${R.waiting_new}개)` : ''}</div></div>`;
+  if (!c) {
+    view.innerHTML = `<main class="rv-card">${todayPanel(true)}
+      <div class="panel empty"><p style="font-size:1.3rem; margin:0">${rvDone ? '🎉 오늘 복습 끝!' : R.total_cards ? '오늘은 복습할 카드가 없어요' : '아직 복습할 카드가 없어요'}</p>
+      <p class="muted">${R.total_cards ? `연속 ${R.streak}일째 복습 중이에요.` : '레슨 노트를 만들면 핵심 정리가 복습 카드가 돼요.'}</p>
+      ${R.queue.length ? `<button id="rv-more">${Math.min(10, R.queue.length)}개 더 하기</button>` : ''}</div>${footer}</main>`;
+    const more = $('#rv-more'); if (more) more.onclick = renderReview;
+    return;
+  }
+  const pct = Math.round(100 * rvIndex / rvQueue.length);
+  const prac = c.kind === 'practica';
+  const related = prac ? c.figures.flatMap(lessonsWith) : [];
+  view.innerHTML = `<main class="rv-card">
+    <div class="row between"><h1 style="margin:0">복습</h1><span class="small muted">${rvIndex + 1} / ${rvQueue.length}${R.streak ? ` · 연속 ${R.streak}일` : ''}</span></div>
+    <div class="rv-progress"><div style="width:${pct}%"></div></div>
+    <section class="panel">
+      ${cardMeta(c)}
+      ${clipHtml(c) ? `<div style="margin-top:10px">${clipHtml(c)}</div>` : ''}
+      ${prac ? `${pointHtml(c)}<p class="small muted">이번엔 어떻게 해 볼지 떠올려 보세요. 다음 쁘락에서 잘 되면 '잘 됐어요'로 남기면 카드가 사라져요.</p>
+          ${related.length ? `<div class="small">관련 레슨: ${related.map(l => `<a href="#/lesson/${encodeURIComponent(l.id)}">${esc(l.title)}</a>`).join(', ')}</div>` : ''}`
+        : rvShown ? pointHtml(c)
+        : `<div class="rv-hidden"><p style="margin:0 0 10px"><b>이 장면의 핵심이 뭐였죠?</b><br><span class="small muted">영상을 보고 먼저 떠올려 본 다음 눌러 보세요</span></p><button class="primary" id="rv-show">핵심 보기</button></div>`}
+      ${prac || rvShown ? `<div class="answer"><button class="no" data-ans="0">가물가물해요<br><span class="small" style="font-weight:400">내일 다시</span></button>
+        <button class="yes" data-ans="1">기억나요<br><span class="small" style="font-weight:400">${(() => { const n = [1, 3, 7, 21, 60][Math.min((c.step ?? 0) + 1, 4)]; return n + '일 뒤'; })()}</span></button></div>
+        <div class="row" style="margin-top:10px">${lessonLink(c)}</div>` : ''}
+    </section>${footer}</main>`;
+  const show = $('#rv-show'); if (show) show.onclick = () => { rvShown = true; drawReview(); };
+  view.querySelectorAll('[data-ans]').forEach(b => b.onclick = async () => {
+    try {
+      await api('/api/review', { method: 'POST', body: { card_id: c.id, remembered: b.dataset.ans === '1', day: today() } });
+      rvIndex++; rvShown = false; rvDone++;
+      state.review.queue = state.review.queue.filter(x => x.id !== c.id); reviewBadge();
+      if (rvIndex >= rvQueue.length) { state.review = await api('/api/review?day=' + today()); reviewBadge(); rvQueue = []; rvIndex = 0; }
+      drawReview();
+    } catch (e) { toast('저장하지 못했어요: ' + e.message); }
+  });
+}
+
+// ---------------------------------------------------------------- practica (쁘락) log
+let prEditing = null, prItems = [];
+function prFigureOptions() {  // figures from my lessons first, then everything the library knows
+  const mine = []; const seen = new Set();
+  state.lessons.forEach(l => lessonFigures(l).forEach(f => { if (!seen.has(f.figure)) { seen.add(f.figure); mine.push({ figure: f.figure, name_ko: f.name_ko }); } }));
+  return [mine, state.figures.filter(f => !seen.has(f.figure))];
+}
+function drawPrItems() {
+  $('#pr-items').innerHTML = prItems.map((it, i) => `<div class="pitem" data-i="${i}">
+    <b>${esc(it.label)}</b>
+    <span class="row" style="gap:6px"><span class="feelpick">${Object.entries(FEEL_KO).map(([k, v]) =>
+      `<button type="button" class="${k}${it.feel === k ? ' on' : ''}" data-feel="${k}">${v}</button>`).join('')}</span>
+      <button type="button" class="link" data-rm="${i}" title="빼기">✕</button></span>
+    <input class="note" data-note="${i}" value="${esc(it.note || '')}" placeholder="${it.feel === 'confusing' ? '어디서 막혔나요?' : '메모 (선택)'}" maxlength="500">
+  </div>`).join('');
+  $('#pr-items').querySelectorAll('[data-feel]').forEach(b => b.onclick = () => {
+    const i = +b.closest('.pitem').dataset.i; prItems[i].feel = b.dataset.feel; drawPrItems(); });
+  $('#pr-items').querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { prItems.splice(+b.dataset.rm, 1); drawPrItems(); drawPrFigs(); });
+  $('#pr-items').querySelectorAll('[data-note]').forEach(inp => inp.oninput = () => { prItems[+inp.dataset.note].note = inp.value; });
+}
+function drawPrFigs() {
+  const [mine, rest] = prFigureOptions();
+  const btn = f => `<button type="button" class="fig ${prItems.some(it => it.figure === f.figure) ? 'on' : ''}" data-fig="${esc(f.figure)}">${esc(f.name_ko)}</button>`;
+  $('#pr-figs').innerHTML = mine.map(btn).join('') + (rest.length ? `<details style="width:100%"><summary class="small muted" style="cursor:pointer">다른 피구라 ${rest.length}개</summary><div class="figpick" style="margin-top:6px">${rest.map(btn).join('')}</div></details>` : '');
+  $('#pr-figs').querySelectorAll('[data-fig]').forEach(b => b.onclick = () => {
+    const k = b.dataset.fig, i = prItems.findIndex(it => it.figure === k);
+    if (i >= 0) prItems.splice(i, 1); else prItems.push({ label: figName(k), figure: k, feel: 'ok', note: '' });
+    b.classList.toggle('on', i < 0); drawPrItems();
+  });
+}
+function openPractica(p) {
+  prEditing = p || null;
+  prItems = p ? p.items.map(it => ({ ...it })) : [];
+  $('#pr-title').textContent = p ? '쁘락 기록 고치기' : '쁘락 기록';
+  $('#pr-day').value = p ? p.day : today();
+  $('#pr-place').value = p ? p.place : (state.practicas[0]?.place || '');
+  $('#pr-min').value = p?.minutes ?? '';
+  $('#pr-partners').value = p ? p.partners : '';
+  $('#pr-note').value = p ? p.note : '';
+  $('#pr-next').value = p ? p.next_time : '';
+  $('#pr-free').value = ''; $('#pr-error').textContent = '';
+  $('#pr-places').innerHTML = [...new Set(state.practicas.map(x => x.place).filter(Boolean))].map(x => `<option value="${esc(x)}">`).join('');
+  drawPrFigs(); drawPrItems();
+  $('#pr-dialog').showModal();
+}
+$('#pr-cancel').onclick = () => $('#pr-dialog').close();
+const addFree = () => { const v = $('#pr-free').value.trim(); if (!v) return; prItems.push({ label: v, figure: null, feel: 'ok', note: '' }); $('#pr-free').value = ''; drawPrItems(); };
+$('#pr-free-add').onclick = addFree;
+$('#pr-free').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); addFree(); } };
+$('#pr-form').onsubmit = async e => {
+  e.preventDefault();
+  const body = { day: $('#pr-day').value, place: $('#pr-place').value, minutes: $('#pr-min').value ? +$('#pr-min').value : null,
+                 partners: $('#pr-partners').value, items: prItems, note: $('#pr-note').value, next_time: $('#pr-next').value };
+  try {
+    if (prEditing) await api('/api/practicas/' + prEditing.id, { method: 'PUT', body });
+    else await api('/api/practicas', { method: 'POST', body });
+    $('#pr-dialog').close();
+    toast('쁘락 기록을 저장했어요');
+    route();
+  } catch (err) { $('#pr-error').textContent = err.message; }
+};
+function renderPractica() {
+  lessonBar.innerHTML = ''; currentLesson = null;
+  const P = state.practicas, conf = state.review?.confusions || [], last = P.find(p => p.next_time);
+  const figLessons = k => lessonsWith(k).map(l => `<a class="small" href="#/lesson/${encodeURIComponent(l.id)}">${esc(l.title)}</a>`).join(', ');
+  const before = (last || conf.length) ? `<section class="panel" style="margin-bottom:14px">
+      <div class="eyebrow">다음 쁘락 가기 전에</div>
+      ${last ? `<div style="margin-top:8px"><b>해보기로 한 것</b> <span class="small muted">${fmtDay(last.day)} 기록</span><div class="next">${esc(last.next_time)}</div></div>` : ''}
+      ${conf.length ? `<div style="margin-top:10px"><b>아직 헷갈리는 것</b> <span class="small muted">다음 쁘락에서 '잘 됐어요'로 남기면 빠져요</span>
+        ${conf.map(c => `<div class="it" style="margin-top:4px">· <b>${esc(c.label)}</b>${c.note ? ` <span class="muted">— ${esc(c.note)}</span>` : ''} <span class="small muted">${fmtDay(c.day)}</span>
+          ${c.figure && lessonsWith(c.figure).length ? `<div class="small" style="margin-left:12px">관련 레슨: ${figLessons(c.figure)}</div>` : ''}</div>`).join('')}</div>` : ''}
+    </section>` : '';
+  const cards = P.map(p => `<div class="panel pr">
+      <div class="row between"><div><b>${fmtDay(p.day)}</b> ${p.place ? `· ${esc(p.place)}` : ''} ${p.minutes ? `<span class="muted small">· ${p.minutes}분</span>` : ''}</div>
+        <div class="row" style="gap:2px"><button class="link" data-edit="${p.id}">고치기</button><button class="link" data-del="${p.id}">삭제</button></div></div>
+      ${p.partners ? `<div class="small muted">함께: ${esc(p.partners)}</div>` : ''}
+      ${p.items.length ? `<div class="items">${p.items.map(it => `<div class="it"><span class="feel ${it.feel}">${FEEL_KO[it.feel]}</span><b>${esc(it.label)}</b>${it.note ? `<span class="small muted">${esc(it.note)}</span>` : ''}</div>`).join('')}</div>` : ''}
+      ${p.note ? `<div class="small" style="white-space:pre-wrap">${esc(p.note)}</div>` : ''}
+      ${p.next_time ? `<div class="small"><b>다음에 해볼 것</b><div class="next">${esc(p.next_time)}</div></div>` : ''}
+    </div>`).join('');
+  const good = {}, bad = {};
+  P.forEach(p => p.items.forEach(it => { const k = it.label; if (it.feel === 'good') good[k] = (good[k] || 0) + 1; if (it.feel === 'confusing') bad[k] = (bad[k] || 0) + 1; }));
+  view.innerHTML = `<main>
+    <div class="row between"><h1>쁘락 기록</h1><button class="primary" id="pr-new">＋ 오늘 쁘락 기록</button></div>
+    ${before}
+    ${P.length ? `<div class="stats" style="margin-bottom:14px">
+        <div class="panel stat"><div class="n">${P.length}<span class="small">번</span></div><div class="l">다녀온 쁘락</div></div>
+        <div class="panel stat"><div class="n">${P.reduce((a, p) => a + (p.minutes || 0), 0)}<span class="small">분</span></div><div class="l">쁘락에서 춘 시간</div></div>
+        <div class="panel stat"><div class="n">${Object.keys(good).length}</div><div class="l">잘 된 것</div></div>
+        <div class="panel stat"><div class="n">${conf.length}</div><div class="l">아직 헷갈리는 것</div></div></div>
+      <div class="grid">${cards}</div>`
+      : `<div class="panel empty"><p><b>쁘락에 다녀오면 여기에 남겨 두세요.</b></p>
+         <p class="muted">어떤 피구라를 춰 봤는지, 잘 됐는지 헷갈렸는지만 눌러 두면 돼요.<br>헷갈린 것은 복습 카드가 되고, 관련 레슨 장면이 '오늘의 한 시퀀스'로 먼저 나와요.</p></div>`}
+  </main>`;
+  $('#pr-new').onclick = () => openPractica(null);
+  view.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => openPractica(P.find(p => p.id === +b.dataset.edit)));
+  view.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+    if (!confirm('이 쁘락 기록을 지울까요?')) return;
+    await api('/api/practicas/' + b.dataset.del, { method: 'DELETE' });
+    route();
+  });
+}
+
 // ---------------------------------------------------------------- router
 async function route() {
   const h = location.hash || '#/';
-  document.querySelectorAll('nav.main a').forEach(a =>
-    a.classList.toggle('active', a.dataset.nav === (h.startsWith('#/records') ? 'records' : 'library')));
+  const navKey = ['records', 'review', 'practica'].find(k => h.startsWith('#/' + k)) || 'library';
+  document.querySelectorAll('nav.main a').forEach(a => a.classList.toggle('active', a.dataset.nav === navKey));
   try { await load(); } catch (e) { view.innerHTML = `<main><div class="panel error">서버에 연결하지 못했어요: ${esc(e.message)}</div></main>`; return; }
   clearInterval(notesTimer); clearTimeout(playTimer); view.onclick = null;
   state.jobs = await api('/api/jobs').catch(() => state.jobs);
   if (h.startsWith('#/lesson/')) {
     // #/lesson/<id>[/<media id>][/guide]
-    const [id, ...rest] = h.slice('#/lesson/'.length).split('/').map(decodeURIComponent);
+    // #/lesson/<id>[/<media id>][/guide][?t=<seconds>]: ?t= starts the notes there (from a review card)
+    const [path, query] = h.slice('#/lesson/'.length).split('?');
+    seekTo = +(new URLSearchParams(query || '').get('t')) || null;
+    const [id, ...rest] = path.split('/').map(decodeURIComponent);
     const mode = rest.at(-1) === 'guide' ? rest.pop() : undefined;
     return renderLesson(id, rest[0], mode);
   }
   currentLesson = null;
   if (h.startsWith('#/records')) return renderRecords();
+  if (h.startsWith('#/review')) return renderReview();
+  if (h.startsWith('#/practica')) return renderPractica();
   return renderLibrary();
 }
 window.addEventListener('hashchange', route);

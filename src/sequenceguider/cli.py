@@ -520,6 +520,32 @@ def batch(
 
 
 @app.command()
+def today(
+    home: Path = typer.Option(Path("."), help="serve와 같은 폴더 (레슨과 연습 기록이 있는 곳)"),
+    port: int = typer.Option(8765, help="링크에 넣을 웹 화면 포트"),
+) -> None:
+    """오늘의 복습: 오늘 볼 한 시퀀스와 복습할 카드 수. 윈도우 작업 스케줄러 등에 걸어 두면 알림처럼 쓸 수 있어요."""
+    from sequenceguider.review import QUEUE_SIZE
+    from sequenceguider.web import App
+
+    plan = App(home).review()
+    t = plan["today"]
+    typer.echo(f"오늘 복습할 카드 {len(plan['queue'])}개 (복습 {plan['due']} · 새로 {plan['new']})"
+               + (f" · 연속 {plan['streak']}일" if plan["streak"] else ""))
+    if t:
+        where = t["lesson_title"] or "쁘락"
+        typer.echo(f"\n오늘의 한 시퀀스 — {where}" + (f" · {t['section']}" if t.get("section") else ""))
+        typer.echo(f"  {t['point']}")
+        if t.get("detail"):
+            typer.echo(f"  {t['detail']}")
+    for c in plan["confusions"][:3]:
+        typer.echo(f"\n지난 쁘락에서 헷갈린 것 ({c['day']}): {c['label']}" + (f" — {c['note']}" if c.get("note") else ""))
+    if len(plan["queue"]) > QUEUE_SIZE:
+        typer.echo(f"\n(한 번에 {QUEUE_SIZE}개씩 보여 드려요)")
+    typer.echo(f"\n복습하기: http://127.0.0.1:{port}/#/review")
+
+
+@app.command()
 def serve(
     home: Path = typer.Option(Path("."), help="분석 결과(<이름>_sequenceguider/)와 연습 기록을 두는 폴더"),
     port: int = typer.Option(8765, help="포트"),
