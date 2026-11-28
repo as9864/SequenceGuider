@@ -81,7 +81,7 @@ class TestWeb:
 
     def test_app_and_lesson_files(self, server):
         status, _, body = call(server, "/")
-        assert status == 200 and b"SequenceGuider" in body
+        assert status == 200 and b"TangoLibrary" in body
         status, _, body = call(server, "/lessons/lesson1_sequenceguider/index.html")
         assert status == 200 and "window.parent.SG".encode() in body
 
