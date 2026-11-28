@@ -2,7 +2,7 @@
 
 Everything lives in one home folder:
     <home>/<name>_sequenceguider/   one lesson each (what `analyze` and/or `notes` write)
-    <home>/records.db               checklist ticks and practice sessions (records.py)
+    <home>/records.db               checklist ticks, practice sessions, review schedule, practica logs (records.py)
     <home>/.jobs/<id>.log           output of analyses started from the web page
 
 Standard library only (http.server + sqlite3). It binds to 127.0.0.1 by
@@ -20,13 +20,14 @@ import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
-from sequenceguider import categories
+from sequenceguider import categories, review
+from sequenceguider.figures import FigureLibrary
 from sequenceguider.records import Records
 
 APP_HTML = Path(__file__).parent / "web" / "app.html"
@@ -340,6 +341,51 @@ class App:
         self.jobs.list()  # a finished job adds the categories picked for it before the list is read
         return find_lessons(self.home)
 
+    # -- review ---------------------------------------------------------------
+
+    def figure_list(self) -> list[dict]:
+        """Every figure the library knows, for picking what was danced at a practica."""
+        if not hasattr(self, "_figures"):
+            lib = FigureLibrary.load()
+            self._figures = [{"figure": f.key, "name_ko": f.name_ko, "name_es": f.name_es} for f in lib.figures.values()]
+        return self._figures
+
+    def review_cards(self, lessons: list[dict] | None = None) -> list[dict]:
+        lessons = self.lessons() if lessons is None else lessons
+        names = {f["figure"]: f["name_ko"] for f in self.figure_list()}
+        cards = [c for lesson in lessons for c in review.lesson_cards(self.home, lesson)]
+        return cards + review.practica_cards([asdict(p) for p in self.records.practicas()], names)
+
+    def review(self, day: str | None = None) -> dict:
+        day = _check_day(day)
+        cards = self.review_cards()
+        reviews, log = self.records.reviews(), self.records.review_log()
+        practicas = [asdict(p) for p in self.records.practicas()]
+        out = review.plan(cards, reviews, log, practicas, day)
+        # the day's one sequence stays the same all day, even after it's been reviewed
+        by_id = {c["id"]: c for c in cards}
+        picked = self.records.daily_pick(day)
+        today = by_id.get(picked) if picked else None
+        if today is None:
+            today = review.pick_today(cards, out["queue"], reviews, day, practicas)
+            if today:
+                self.records.set_daily_pick(day, today["id"])
+        if today:
+            today = {**today, "reviewed_today": any(e["card_id"] == today["id"] and e["day"] == day for e in log)}
+        out["today"] = today
+        out["confusions"] = review.open_confusions(practicas)
+        return out
+
+    def answer_review(self, card_id: str, remembered: bool, day: str | None = None) -> dict:
+        day = _check_day(day)
+        card = next((c for c in self.review_cards() if c["id"] == card_id), None)
+        if card is None:
+            raise KeyError("없는 복습 카드입니다")
+        prev = self.records.reviews().get(card_id)
+        step, due = review.next_state(None if prev is None else prev["step"], remembered, day)
+        self.records.save_review(card_id, lesson=card["lesson"], step=step, due=due, day=day, remembered=remembered)
+        return {"id": card_id, "step": step, "due": due}
+
     def set_categories(self, lesson: str, ids: list) -> list[str]:
         """The user's own list for the lesson. From now on it's kept as is, not re-suggested."""
         folder = self._folder(lesson)
@@ -456,6 +502,19 @@ class App:
         return folder.name
 
 
+def _check_day(day: str | None) -> str:
+    """The browser's own date (it may differ from the server's around midnight), or today."""
+    if not day:
+        return date.today().isoformat()
+    return date.fromisoformat(str(day)).isoformat()  # ValueError on a malformed day
+
+
+def _practica_fields(b: dict) -> dict:
+    return {"day": b.get("day"), "place": str(b.get("place", "")), "minutes": b.get("minutes"),
+            "partners": str(b.get("partners", "")), "items": b.get("items") if isinstance(b.get("items"), list) else [],
+            "note": str(b.get("note", "")), "next_time": str(b.get("next_time", ""))}
+
+
 def _id_list(value) -> list[str]:
     if value is None:
         return []
@@ -532,7 +591,8 @@ def make_handler(app: App):
                     pass  # the browser cancels range requests all the time while seeking
 
         def _route(self, method: str) -> None:
-            path = unquote(urlparse(self.path).path)
+            url = urlparse(self.path)
+            path, query = unquote(url.path), parse_qs(url.query)
             try:
                 if method == "GET" and path in ("/", "/index.html"):
                     return self._file(APP_HTML)
@@ -579,6 +639,22 @@ def make_handler(app: App):
                     return self._json(asdict(s), 201)
                 if (m := re.fullmatch(r"/api/sessions/(\d+)", path)) and method == "DELETE":
                     ok = app.records.delete_session(int(m.group(1)))
+                    return self._json({"deleted": ok}, 200 if ok else 404)
+                if path == "/api/figures" and method == "GET":
+                    return self._json(app.figure_list())
+                if path == "/api/review" and method == "GET":
+                    return self._json(app.review((query.get("day") or [None])[0]))
+                if path == "/api/review" and method == "POST":
+                    b = self._body()
+                    return self._json(app.answer_review(str(b.get("card_id", "")), bool(b.get("remembered")), b.get("day")))
+                if path == "/api/practicas" and method == "GET":
+                    return self._json([asdict(p) for p in app.records.practicas()])
+                if path == "/api/practicas" and method == "POST":
+                    return self._json(asdict(app.records.add_practica(**_practica_fields(self._body()))), 201)
+                if (m := re.fullmatch(r"/api/practicas/(\d+)", path)) and method == "PUT":
+                    return self._json(asdict(app.records.update_practica(int(m.group(1)), **_practica_fields(self._body()))))
+                if (m := re.fullmatch(r"/api/practicas/(\d+)", path)) and method == "DELETE":
+                    ok = app.records.delete_practica(int(m.group(1)))
                     return self._json({"deleted": ok}, 200 if ok else 404)
                 if path == "/api/export" and method == "GET":
                     return self._json(app.records.export())
