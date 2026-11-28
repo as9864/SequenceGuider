@@ -215,14 +215,26 @@ class Renderer:
             row = row.strip().removeprefix("|").removesuffix("|")
             return [c.strip() for c in re.split(r"(?<!\\)\|", row)]
 
+        def pipes(text: str) -> int:
+            return len(re.findall(r"(?<!\\)\|", text))
+
         head = cells(lines[i])
+        want = len(head) + 1  # pipes in a whole row
         j = i + 2
         rows = []
         while j < len(lines) and lines[j].strip().startswith("|"):
-            rows.append(cells(lines[j]))
+            # Notion writes a cell's line breaks as they are: a row goes on over the lines that
+            # don't start a new row, until it has all its cells
+            row = [lines[j].strip()]
             j += 1
-        th = "".join(f"<th>{self.inline(c)}</th>" for c in head)
-        body = "".join("<tr>" + "".join(f"<td>{self.inline(c)}</td>" for c in r) + "</tr>" for r in rows)
+            while (pipes("\n".join(row)) < want or not row[-1].rstrip().endswith("|")) and j < len(lines) \
+                    and lines[j].strip() and not lines[j].strip().startswith("|"):
+                row.append(lines[j].strip())
+                j += 1
+            rows.append(cells("\n".join(row)))
+        cell = lambda c: "<br>".join(self.inline(part.strip()) for part in c.split("\n"))
+        th = "".join(f"<th>{cell(c)}</th>" for c in head)
+        body = "".join("<tr>" + "".join(f"<td>{cell(c)}</td>" for c in r) + "</tr>" for r in rows)
         out.append(f'<div class="table-wrap"><table><thead><tr>{th}</tr></thead><tbody>{body}</tbody></table></div>')
         return j
 

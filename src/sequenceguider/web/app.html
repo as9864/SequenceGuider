@@ -151,6 +151,7 @@ mark { background: #ffe58a; color: #1d1d1f; border-radius: 3px; }
 .catpick .sug { font-size: .7rem; color: var(--accent); font-weight: 700; }
 /* notes imported from Notion */
 .badge.doc { background: #8a6d3b; }
+.badge.k-sequence { background: #5b5fc7; } .chip.status { border-style: dashed; }
 .badge.k-lesson { background: #3b7d5a; } .badge.k-practica { background: #b05a2f; } .badge.k-feedback { background: #a0436b; }
 .doc { max-width: 820px; }
 .doc .meta { display:flex; flex-wrap: wrap; gap: 6px 14px; color: var(--muted); font-size: .88rem; margin: 4px 0 10px; }
@@ -317,8 +318,9 @@ function catPicker(selected, suggested = []) {  // checkboxes grouped like 기�
     `<label><input type="checkbox" value="${esc(c.id)}" ${selected.includes(c.id) ? 'checked' : ''}>${esc(c.name_ko)}${
       suggested.includes(c.id) ? ' <span class="sug">추천</span>' : ''}</label>`).join('')}</div>`).join('');
 }
-const KIND_NAMES = { lesson: '레슨', practica: '쁘락', feedback: '피드백', note: '정리', video: '영상 분석' };
-const lessonKind = l => l.doc ? l.doc.kind : 'video';
+const KIND_NAMES = { lesson: '레슨', practica: '쁘락', feedback: '피드백', note: '정리', sequence: '시퀀스', video: '영상 분석' };
+const docFirst = l => l.doc && !l.media.some(m => m.notes || m.has_guide);  // open the Notion page, not a recording's notes
+const lessonKind = l => l.doc && !l.doc.attached ? l.doc.kind : 'video';
 const fmtDate = s => { const [y, m, d] = s.split('-'); return `${y}년 ${+m}월 ${+d}일`; };
 const pickedCats = el => [...el.querySelectorAll('input:checked')].map(i => i.value);
 
@@ -399,11 +401,11 @@ async function renderLibrary() {
     const pct = p.total ? Math.round(100 * p.done / p.total) : 0;
     const summary = l.notes?.summary || l.doc?.summary;
     return `<a class="panel lesson" href="#/lesson/${encodeURIComponent(l.id)}">
-      <div class="row" style="gap:6px">${l.doc ? `<span class="badge k-${lessonKind(l)}">${KIND_NAMES[lessonKind(l)]}</span><span class="badge doc">노션 글${l.doc.pages > 1 ? ' · ' + l.doc.pages + '쪽' : ''}</span>` : ''}${l.notes ? `<span class="badge notes">노트${l.notes.duration_s ? ' · ' + fmtHMS(l.notes.duration_s) : ''}</span>` : ''}${l.has_guide ? '<span class="badge">동작 분석</span>' : ''}${l.media.length > 1 ? `<span class="chip">${l.media.map(mediaIcon).join('')} ${l.media.length}개</span>` : ''}</div>
+      <div class="row" style="gap:6px">${l.doc ? `${l.doc.attached ? '' : `<span class="badge k-${lessonKind(l)}">${KIND_NAMES[lessonKind(l)]}</span>`}<span class="badge doc">노션 글${l.doc.pages > 1 ? ' · ' + l.doc.pages + '쪽' : ''}</span>` : ''}${l.notes ? `<span class="badge notes">노트${l.notes.duration_s ? ' · ' + fmtHMS(l.notes.duration_s) : ''}</span>` : ''}${l.has_guide ? '<span class="badge">동작 분석</span>' : ''}${l.media.length > 1 ? `<span class="chip">${l.media.map(mediaIcon).join('')} ${l.media.length}개</span>` : ''}</div>
       <h3>${esc(l.title)}</h3>
       ${l.doc?.date || l.doc?.people.length ? `<div class="small muted">${[l.doc.date && fmtDate(l.doc.date), l.doc.people.join(', ')].filter(Boolean).map(esc).join(' · ')}</div>` : ''}
       ${summary ? `<div class="small muted clamp">${esc(summary)}</div>` : ''}
-      <div class="chips">${l.categories.length ? catChips(l.categories) : lessonFigures(l).map(f => `<span class="chip">${esc(label(f))}</span>`).join('')}${(l.doc?.tags || []).map(t => `<span class="chip">${esc(t)}</span>`).join('')}</div>
+      <div class="chips">${l.categories.length ? catChips(l.categories) : lessonFigures(l).map(f => `<span class="chip">${esc(label(f))}</span>`).join('')}${(l.doc?.tags || []).map(t => `<span class="chip">${esc(t)}</span>`).join('')}${l.doc?.status ? `<span class="chip status">${esc(l.doc.status)}</span>` : ''}</div>
       ${p.total || !l.doc ? `<div><div class="row between small"><span>연습 체크리스트 ${p.done}/${p.total}</span><span class="muted">${pct}%</span></div>
       <div class="meter"><div style="width:${pct}%"></div></div></div>` : ''}
       <div class="small muted">${last ? `마지막 연습 ${fmtDay(last)}` : '아직 연습 기록 없음'}</div>
@@ -469,7 +471,7 @@ async function renderLibrary() {
       const res = await fetch('/api/import/notion', { method: 'POST', headers: { 'Content-Type': 'application/zip' }, body: file });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || res.statusText);
-      store.set('sg.importResult', `새로 ${data.created}개, 고침 ${data.updated}개, 그대로 ${data.unchanged}개`);
+      store.set('sg.importResult', `새로 ${data.created}개, 고침 ${data.updated}개, 그대로 ${data.unchanged}개` + (data.merged.length ? `, 합침 ${data.merged.length}개` : '') + (data.skipped.length ? `, 빈 페이지 ${data.skipped.length}개 건너뜀` : ''));
       store.set('sg.cat', null); store.set('sg.kind', null);
       await load(); await renderLibrary();
     } catch (e) { $('#import-error').textContent = '가져오지 못했어요: ' + e.message; btn.disabled = false; btn.textContent = '가져오기'; }
@@ -537,7 +539,7 @@ function renderLessonBar() {
   if (!currentLesson) { lessonBar.innerHTML = ''; return; }
   const p = progress(currentLesson), started = timerStart(), item = currentMedia;
   const both = item?.notes && item.has_guide, id = encodeURIComponent(currentLesson.id);
-  const first = currentLesson.doc ? null : currentLesson.media[0];  // the item #/lesson/<id> opens
+  const first = docFirst(currentLesson) ? null : currentLesson.media[0];  // the item #/lesson/<id> opens
   const itemPath = item && item !== first ? '/' + item.id : '';
   lessonBar.innerHTML = `<div class="lesson-bar">
     <a href="#/library" class="link small muted" style="text-decoration:none">← 레슨 목록</a>
@@ -547,7 +549,7 @@ function renderLessonBar() {
     ${started ? `<span class="timer" id="timer"></span><button class="primary" id="timer-stop">끝내고 기록</button>`
               : `<button id="timer-start">연습 시작</button><button class="primary" id="log-open">기록 남기기</button>`}
   </div>
-  <nav class="media-strip" aria-label="이 레슨의 영상·오디오">${currentLesson.doc ? `<a class="mchip ${lessonMode === 'doc' ? 'on' : ''}" href="#/lesson/${id}"><span>📝</span><span>노션 글</span></a>` : ''}${currentLesson.media.map(m => {
+  <nav class="media-strip" aria-label="이 레슨의 영상·오디오">${currentLesson.doc ? `<a class="mchip ${lessonMode === 'doc' ? 'on' : ''}" href="#/lesson/${id}${docFirst(currentLesson) ? '' : '/doc'}"><span>📝</span><span>노션 글</span></a>` : ''}${currentLesson.media.map(m => {
     const [cls, tag] = mediaTag(currentLesson, m);
     return `<a class="mchip ${m === item && lessonMode !== 'doc' ? 'on' : ''}" href="#/lesson/${id}${m === first ? '' : '/' + m.id}">
       <span>${mediaIcon(m)}</span><span>${esc(mediaName(currentLesson, m))}</span><span class="tag ${cls}">${tag}</span></a>`;
@@ -573,7 +575,7 @@ function renderLesson(id, mediaId, mode) {
   currentLesson = state.lessons.find(l => l.id === id);
   if (!currentLesson) { view.innerHTML = `<main><div class="panel empty">레슨을 찾을 수 없어요. <a href="#/library">목록으로</a></div></main>`; return; }
   const picked = currentLesson.media.find(m => m.id === mediaId);
-  if (currentLesson.doc && (!picked || mode === 'doc')) {
+  if (currentLesson.doc && (mode === 'doc' || (!picked && docFirst(currentLesson)))) {
     currentMedia = null; lessonMode = 'doc';
     renderLessonBar();
     document.documentElement.style.setProperty('--head', $('header.top').offsetHeight + 'px');
@@ -596,6 +598,7 @@ async function renderDoc(lesson) {
   catch (e) { view.innerHTML = `<main class="doc"><div class="panel error">글을 불러오지 못했어요: ${esc(e.message)}</div></main>`; return; }
   if (currentLesson !== lesson) return;
   const meta = [doc.kind && `<span class="badge k-${esc(doc.kind)}">${KIND_NAMES[doc.kind] || ''}</span>`,
+                doc.collection && `<span>${esc(doc.collection)}</span>`, doc.status && `<span class="chip status">${esc(doc.status)}</span>`,
                 doc.date && `<span>${esc(fmtDate(doc.date))}</span>`, doc.people.length && `<span>${esc(doc.people.join(', '))}</span>`,
                 ...doc.props.map(p => `<span>${esc(p.name)}: ${esc(p.value)}</span>`)].filter(Boolean).join('');
   const subs = doc.pages.slice(1);
@@ -1109,7 +1112,7 @@ async function route() {
   if (h.startsWith('#/lesson/')) {
     // #/lesson/<id>[/<media id>][/guide]
     const [id, ...rest] = h.slice('#/lesson/'.length).split('/').map(decodeURIComponent);
-    const mode = ['guide', 'doc'].includes(rest.at(-1)) ? rest.pop() : undefined;
+    const mode = ['guide', 'doc'].includes(rest.at(-1)) ? rest.pop() : undefined;  // #/lesson/<id>/doc: its Notion page
     return renderLesson(id, rest[0], mode);
   }
   currentLesson = null;

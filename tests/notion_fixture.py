@@ -65,7 +65,7 @@ def files(body_extra: str = "") -> dict[str, bytes | str]:
         f"{DB}/{name('커넥션에 대한 개념')}.md": "# 커넥션에 대한 개념\n\n> 가슴으로 듣는다\n",
         f"{DB}/{name('Brenno y fati class')}.md": "# Brenno y fati class\n\n날짜: 2025년 11월 7일\n영상주소: https://youtu.be/AAAAAAAAAAA\n\n볼레오 타이밍\n",
         f"{DB}/{name('성공 노트')}.md": "# 성공 노트\n\nKeyword: 걷기, 오쵸, 커넥션\n\n오늘은 잘 됐다.\n",
-        f"{DB}/{name('깔리토스')}.md": "# 깔리토스\n\n",
+        f"{DB}/{name('깔리토스')}.md": "# 깔리토스\n\n꼴가다: 움직임 사이에 부드러운 연결감\n",
     }
     return out
 

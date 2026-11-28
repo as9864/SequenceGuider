@@ -194,3 +194,8 @@ def test_web_upload_and_doc(tmp_path, export):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_table_cells_with_line_breaks():
+    html = markdown.render("| 동작 | 주의 |\n| --- | --- |\n| 안기 | 1. 상체\n  2. 손가락 |\n| 걷기 | 축 |")
+    assert html.count("<tr>") == 3 and "1. 상체<br>2. 손가락" in html

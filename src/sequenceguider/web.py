@@ -185,6 +185,8 @@ def find_lessons(home: Path) -> list[dict]:
             "doc": None if info is None else {
                 "kind": info.get("kind", "note"), "date": info.get("date"), "people": info.get("people", []),
                 "tags": info.get("tags", []), "summary": info.get("summary", ""), "pages": len(info.get("pages", [])),
+                "status": info.get("status", ""), "collection": info.get("collection", ""),
+                "attached": bool(info.get("attached")),
             },
             "updated_at": datetime.fromtimestamp(max(stamps, default=folder.stat().st_mtime)).isoformat(timespec="seconds"),
         })
